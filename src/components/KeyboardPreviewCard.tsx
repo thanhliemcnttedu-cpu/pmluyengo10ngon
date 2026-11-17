@@ -380,7 +380,7 @@ export const KeyboardPreviewCard: React.FC<KeyboardPreviewCardProps> = ({
         {/* Hover Sparkle Badge */}
         <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-white/90 backdrop-blur-xs text-[10px] font-black text-slate-800 shadow border border-slate-200 flex items-center gap-1">
           <Sparkles className="w-3 h-3 text-amber-500" />
-          <span>Full 104 Phím</span>
+          <span>{theme.isHandsGuideTheme ? 'Hàng F + khối chính' : 'Full 104 Phím · thu gọn được'}</span>
         </div>
       </div>
 

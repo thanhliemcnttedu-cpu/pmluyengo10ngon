@@ -97,6 +97,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   handsOverlayEnabled: true, // Bàn phím có bàn tay hướng dẫn là mặc định
   handsVisible: true,
   handsOnRealKeyboards: true, // Mọi kiểu bàn phím mặc định bật bàn tay ngón tay ảo
+  realKeyboardCompact: false, // Bàn phím thật mặc định Full size (đủ cụm điều hướng, phím số)
   startGateEnabled: false, // Mặc định vào bài là tính giờ luôn (bật lại trong Đổi phím / Cài đặt lớp học)
   handsOpacity: 0.75,
   handsStyle: 'realistic',
@@ -645,7 +646,8 @@ export default function App() {
       return;
     }
     // Chọn bàn phím nào cũng mặc định BẬT bàn tay ngón tay ảo (tắt được bằng nút "Bàn tay" trong hộp này)
-    setSettings((s) => ({ ...s, handsOverlayEnabled: false, handsVisible: true, handsOnRealKeyboards: true }));
+    // Chọn bàn phím thật nào cũng bắt đầu ở Full size; muốn thu gọn thì bấm nút "Thu gọn" trên bàn phím
+    setSettings((s) => ({ ...s, handsOverlayEnabled: false, handsVisible: true, handsOnRealKeyboards: true, realKeyboardCompact: false }));
     setCurrentKeyboardTheme(theme);
     try {
       localStorage.setItem('typing_kids_keyboard_theme', theme.id);
@@ -679,6 +681,10 @@ export default function App() {
   }, []);
 
   // Bật/tắt màn chờ "BẮT ĐẦU GÕ" (đếm 3-2-1)
+  const setRealKeyboardCompact = useCallback((compact: boolean) => {
+    setSettings((s) => ({ ...s, realKeyboardCompact: compact }));
+  }, []);
+
   const toggleStartGate = useCallback(() => {
     setSettings((s) => ({ ...s, startGateEnabled: !s.startGateEnabled }));
   }, []);
@@ -2499,6 +2505,8 @@ export default function App() {
                 suggestedKeyHeight={smartViewport.keyboardKeyHeight}
                 capsLockOn={capsLockOn}
                 onToggleCapsLock={() => setCapsLockOn((prev) => !prev)}
+                compactLayout={!!settings.realKeyboardCompact}
+                onSetCompactLayout={setRealKeyboardCompact}
               />
             </section>
 

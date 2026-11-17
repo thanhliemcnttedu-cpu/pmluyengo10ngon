@@ -227,6 +227,7 @@ export interface AppSettings {
   handsOverlayEnabled: boolean; // = đang dùng KIỂU bàn phím hướng dẫn (chỉ khu vực chính, phím to)
   handsVisible?: boolean; // Hiện bàn tay hướng dẫn (bật/tắt được trên MỌI kiểu bàn phím)
   handsOnRealKeyboards?: boolean; // Lựa chọn nhớ riêng cho các kiểu bàn phím 108 phím (mặc định tắt)
+  realKeyboardCompact?: boolean; // Bàn phím thật: true = kiểu gọn (chỉ hàng F + khối chính như mặc định), false = Full size
   startGateEnabled?: boolean; // Màn chờ "BẮT ĐẦU GÕ" + đếm 3-2-1 (mặc định TẮT: vào bài là tính giờ luôn)
   handsOpacity: number; // 0.2 to 1.0
   handsStyle: HandDisplayStyle;

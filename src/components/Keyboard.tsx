@@ -41,6 +41,10 @@ interface KeyboardProps {
   capsLockOn?: boolean;
   onToggleCapsLock?: () => void;
   symbolGuideInfo?: SymbolKeyGuideInfo | null;
+  /** Bàn phím thật kiểu gọn: bỏ cụm điều hướng + phím số, chỉ còn hàng F và khối phím chính */
+  compactLayout?: boolean;
+  /** Học sinh bấm nút Full size / Gọn ngay trên dải đầu bàn phím thật */
+  onSetCompactLayout?: (compact: boolean) => void;
 }
 
 // ---- Kiểu dáng chế độ bàn tay hướng dẫn: phím phẳng sáng màu, viền chàm rõ nét, chữ đậm dễ đọc ----
@@ -80,11 +84,15 @@ export const Keyboard: React.FC<KeyboardProps> = ({
   capsLockOn: capsLockOnProp,
   onToggleCapsLock,
   symbolGuideInfo,
+  compactLayout = false,
+  onSetCompactLayout,
 }) => {
   const activeTheme = theme || DEFAULT_KEYBOARD_THEME;
   // CHẾ ĐỘ BÀN TAY HƯỚNG DẪN: chỉ hiện khối phím chính, phím to, phẳng, sáng màu để
   // ngón tay mô phỏng đặt lên rõ ràng (học sinh nhìn thấy ngón nào đi tới phím nào)
   const guideMode = handsOverlayEnabled;
+  // Chỉ khối phím chính + hàng Esc/F1–F12: bàn phím mặc định, hoặc bàn phím thật chọn kiểu "Gọn"
+  const mainOnly = guideMode || compactLayout;
   // Bàn 108 phím cũng hiện được bàn tay: lớp bàn tay nằm trong khu vực chính nên chỉ vẽ trên vùng đó
   const showHands = handsVisible ?? handsOverlayEnabled;
   // Phím Shift cần giữ theo quy tắc tay đối diện: phím do tay phải bấm -> Shift trái và ngược lại
@@ -127,14 +135,16 @@ export const Keyboard: React.FC<KeyboardProps> = ({
       const framePadding = isCompactHeight ? 10 : 16;
       const availableWidth = Math.max(300, width - framePadding);
 
-      if (guideMode) {
+      if (mainOnly) {
         // Chỉ khối phím chính (15U + 14 khe): phím rộng theo bề ngang, cao bằng ~0,78 bề rộng như phím thật nhìn từ trên
         const vhG = window.innerHeight || 768;
         const rectG = containerRef.current.getBoundingClientRect();
         const topG = rectG.top > 0 ? rectG.top : 330;
-        const availH = Math.max(150, vhG - topG - (isCompactHeight ? 14 : 18));
+        // Bàn phím thật kiểu gọn còn dải đèn Num/Caps phía trên (~26px)
+        const availH = Math.max(150, vhG - topG - (isCompactHeight ? 14 : 18) - (guideMode ? 0 : vhG < 800 ? 18 : 30));
         const unitByW = Math.floor((availableWidth - 8 - 14 * 4) / 15);
-        const keyHByH = Math.floor((availH - 22 - 4 * 6) / 5);
+        // 5 hàng phím chính + hàng Esc/F1–F12 (cao 0,76 phím, cách 8px)
+        const keyHByH = Math.floor((availH - 22 - 4 * 6 - 8) / 5.76);
         const u = Math.max(26, Math.min(120, unitByW));
         setUnitSize(u);
         baseKeyHeightRef.current = Math.max(26, Math.min(96, Math.round(u * 0.78), keyHByH));
@@ -214,7 +224,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
       roHost.disconnect();
       window.removeEventListener('resize', calculateSize);
     };
-  }, [isCompactHeight, maxUnitSize, suggestedKeyHeight, guideMode]);
+  }, [isCompactHeight, maxUnitSize, suggestedKeyHeight, guideMode, mainOnly]);
 
   // LUÔN HIỆN ĐỦ BÀN PHÍM: sau khi vẽ, đo bàn phím thật so với khung còn trống (section bao ngoài).
   // Ước lượng theo chiều cao cửa sổ ở trên không biết dải "Mẹo nhỏ", thanh bài giao, ảnh SGK…
@@ -234,7 +244,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
       if (!frame) return;
       const need = frame.offsetHeight + parseFloat(getComputedStyle(el).paddingBottom || '0');
       if (avail <= 0) return;
-      const rows = guideMode ? 5 : 5.76;
+      const rows = 5.76; // cả hai kiểu bàn phím đều có hàng Esc/F1–F12
       // Tràn: hạ phím đủ để vừa. Thừa chỗ (do lần trước hạ quá tay): nâng lại, không vượt cỡ chuẩn.
       const delta = need > avail ? -Math.ceil((need - avail) / rows) : Math.floor((avail - need - 2) / rows);
       if (delta === 0) return;
@@ -242,7 +252,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
       if (fitPassRef.current >= 8) return;
       fitPassRef.current += 1;
       setKeyHeight((kh) => {
-        const next = Math.max(20, Math.min(baseKeyHeightRef.current, kh + delta));
+        const next = Math.max(16, Math.min(baseKeyHeightRef.current, kh + delta));
         return next === kh ? kh : next;
       });
     }, 150);
@@ -282,9 +292,11 @@ export const Keyboard: React.FC<KeyboardProps> = ({
   const mainSectionWidth = 15.0 * unitSize + 14 * gapX;
   const navSectionWidth = 3.0 * unitSize + 2 * gapX;
   const numpadSectionWidth = 4.0 * unitSize + 3 * gapX;
-  const totalKeyboardWidth = guideMode
+  // Dải đèn hẹp (bàn phím nhỏ): rút gọn chữ để dải chỉ cao 1 dòng, không chiếm chỗ của phím
+  const totalKeyboardWidth = mainOnly
     ? mainSectionWidth
     : mainSectionWidth + sectionGap + navSectionWidth + sectionGap + numpadSectionWidth;
+  const narrowBar = totalKeyboardWidth < 980;
 
 
   // Helper tính toán kích thước phông chữ chuẩn xác theo từng loại phím
@@ -670,18 +682,53 @@ export const Keyboard: React.FC<KeyboardProps> = ({
           {/* BẢNG ĐÈN LED CHỈ BÁO TRẠNG THÁI: NUM LOCK, CAPS LOCK, SCROLL LOCK          */}
           {/* ========================================================================= */}
           <div
-            className="flex items-center justify-between mx-auto px-2.5 py-0.5 rounded-lg bg-slate-950/90 border border-slate-700/80 shadow-inner select-none"
+            className="flex items-center justify-between [@media(max-height:799px)]:justify-center gap-2 mx-auto px-2.5 py-0.5 [@media(max-height:799px)]:py-0 rounded-lg bg-slate-950/90 border border-slate-700/80 shadow-inner select-none"
             style={{ width: `${totalKeyboardWidth}px` }}
           >
-            <div className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-[10px] font-mono font-black text-slate-300 tracking-tight">
-                BÀN PHÍM THẬT FULL SIZE 108 PHÍM
+            <div className="flex [@media(max-height:799px)]:hidden items-center gap-1.5 min-w-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <span className="text-[10px] font-mono font-black text-slate-300 tracking-tight truncate">
+                {narrowBar ? (compactLayout ? 'KIỂU GỌN' : 'FULL SIZE') : compactLayout ? 'BÀN PHÍM THẬT · KIỂU GỌN' : 'BÀN PHÍM THẬT FULL SIZE 108 PHÍM'}
               </span>
             </div>
 
+            {/* Nút đổi kiểu bàn phím thật ngay trên bàn phím: học sinh tự chuyển Full size <-> Gọn */}
+            {onSetCompactLayout && (
+              <div
+                className="flex items-center gap-0.5 p-0.5 rounded-full bg-white shrink-0"
+                role="group"
+                aria-label="Kiểu bàn phím thật"
+                data-testid="keyboard-size-toggle"
+              >
+                <button
+                  type="button"
+                  onClick={() => onSetCompactLayout(false)}
+                  aria-pressed={!compactLayout}
+                  data-testid="keyboard-size-full"
+                  title="Đủ 104 phím: hàng F, cụm phím điều hướng và phím số"
+                  className={`px-2.5 py-0.5 [@media(max-height:799px)]:py-0 rounded-full text-[11px] font-black leading-tight cursor-pointer transition-colors ${
+                    !compactLayout ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Full size 104 phím
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSetCompactLayout(true)}
+                  aria-pressed={compactLayout}
+                  data-testid="keyboard-size-compact"
+                  title="Chỉ hàng Esc, F1–F12 và khối phím chính như bàn phím mặc định: phím to, dễ nhìn hơn"
+                  className={`px-2.5 py-0.5 [@media(max-height:799px)]:py-0 rounded-full text-[11px] font-black leading-tight cursor-pointer transition-colors ${
+                    compactLayout ? 'bg-sky-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Thu gọn
+                </button>
+              </div>
+            )}
+
             {/* LED Status Indicators */}
-            <div className="flex items-center gap-2 text-[10px] font-mono">
+            <div className="flex [@media(max-height:799px)]:hidden items-center gap-2 text-[10px] font-mono whitespace-nowrap shrink-0">
               {/* NUM LOCK */}
               <button
                 type="button"
@@ -694,7 +741,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
                 title="Bấm để bật/tắt Num Lock"
               >
                 <span className={`w-2 h-2 rounded-full transition-all ${numLockActive ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-slate-600'}`} />
-                <span>1 NUM LOCK: {numLockActive ? 'BẬT 🟢' : 'TẮT ⚪'}</span>
+                <span>{narrowBar ? `NUM: ${numLockActive ? 'BẬT' : 'TẮT'}` : `1 NUM LOCK: ${numLockActive ? 'BẬT 🟢' : 'TẮT ⚪'}`}</span>
               </button>
 
               {/* CAPS LOCK */}
@@ -712,12 +759,12 @@ export const Keyboard: React.FC<KeyboardProps> = ({
                 title="Bấm để bật/tắt Caps Lock"
               >
                 <span className={`w-2 h-2 rounded-full transition-all ${capsLockActive ? 'bg-amber-400 shadow-[0_0_8px_#fbbf24]' : 'bg-slate-600'}`} />
-                <span>A CAPS LOCK: {capsLockActive ? 'BẬT (IN HOA) 🟡' : 'TẮT ⚪'}</span>
+                <span>{narrowBar ? `CAPS: ${capsLockActive ? 'BẬT' : 'TẮT'}` : `A CAPS LOCK: ${capsLockActive ? 'BẬT (IN HOA) 🟡' : 'TẮT ⚪'}`}</span>
               </button>
 
               {/* SCROLL LOCK */}
               <div
-                className={`hidden md:flex items-center gap-1 px-2 py-0.5 rounded font-black ${
+                className={`${narrowBar ? 'hidden' : 'hidden md:flex'} items-center gap-1 px-2 py-0.5 rounded font-black ${
                   scrollLockActive
                     ? 'bg-emerald-950 text-emerald-200 border border-emerald-400/80'
                     : 'bg-slate-900 text-slate-500 border border-slate-800'
@@ -728,7 +775,11 @@ export const Keyboard: React.FC<KeyboardProps> = ({
               </div>
             </div>
           </div>
+          </>
+          )}
 
+          {!mainOnly && (
+          <>
           {/* ========================================================================= */}
           {/* 1. TOP FUNCTION ROW (ESC, F1-F12, PRTSC/SCRLK/PAUSE, 108TH EXTRA KEYS)     */}
           {/* ========================================================================= */}
@@ -784,6 +835,26 @@ export const Keyboard: React.FC<KeyboardProps> = ({
           </>
           )}
 
+          {/* Bàn phím mặc định (có bàn tay): thêm hàng Esc, F1–F12 vì có bài luyện dùng các phím này */}
+          {mainOnly && (
+            <div
+              className="flex items-center justify-between mx-auto"
+              style={{ width: `${mainSectionWidth}px`, marginBottom: `${fnRowBottomMargin}px` }}
+              data-testid="guide-function-row"
+            >
+              {renderKey(FUNCTION_ROW[0], fnKeyHeight)}
+              <div className="flex" style={{ gap: `${gapX}px` }}>
+                {FUNCTION_ROW.slice(1, 5).map((k) => renderKey(k, fnKeyHeight))}
+              </div>
+              <div className="flex" style={{ gap: `${gapX}px` }}>
+                {FUNCTION_ROW.slice(5, 9).map((k) => renderKey(k, fnKeyHeight))}
+              </div>
+              <div className="flex" style={{ gap: `${gapX}px` }}>
+                {FUNCTION_ROW.slice(9, 13).map((k) => renderKey(k, fnKeyHeight))}
+              </div>
+            </div>
+          )}
+
           {/* ========================================================================= */}
           {/* 2. MAIN KEYBOARD BODY (Main ANSI 15U + Nav Cluster 3U + Numpad 4U)        */}
           {/* ========================================================================= */}
@@ -828,7 +899,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
               />
             </div>
 
-            {!guideMode && (
+            {!mainOnly && (
             <>
             {/* 2. Navigation Cluster Section (3.0 U wide, true inverted-T arrows) */}
             <div
