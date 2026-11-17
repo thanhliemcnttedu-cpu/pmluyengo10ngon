@@ -92,7 +92,7 @@ export const KeyboardPreviewCard: React.FC<KeyboardPreviewCardProps> = ({
       </div>
 
       {/* High-Fidelity Keyboard 3D SVG Render Illustration */}
-      <div className="relative w-full h-36 rounded-2xl overflow-hidden p-2 bg-gradient-to-b from-slate-100 to-slate-200 border border-slate-200 flex items-center justify-center shadow-inner group-hover:scale-[1.02] transition-transform">
+      <div className="relative w-full h-28 rounded-2xl overflow-hidden p-2 bg-gradient-to-b from-slate-100 to-slate-200 border border-slate-200 flex items-center justify-center shadow-inner group-hover:scale-[1.02] transition-transform">
         <svg
           viewBox="0 0 340 160"
           className="w-full h-full drop-shadow-md"

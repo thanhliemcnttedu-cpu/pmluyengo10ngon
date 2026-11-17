@@ -96,7 +96,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   voicePrompt: false,
   handsOverlayEnabled: true, // Bàn phím có bàn tay hướng dẫn là mặc định
   handsVisible: true,
-  handsOnRealKeyboards: false,
+  handsOnRealKeyboards: true, // Mọi kiểu bàn phím mặc định bật bàn tay ngón tay ảo
   handsOpacity: 0.75,
   handsStyle: 'realistic',
   showFingerGuideText: true,
@@ -616,12 +616,13 @@ export default function App() {
 
   const handleSelectTheme = (theme: KeyboardSkinTheme) => {
     // Chọn "Bàn phím có hướng dẫn tay gõ" -> bật bàn tay; chọn mẫu bàn phím khác -> tắt bàn tay để hiện đúng mẫu đó
-    // Bàn tay giờ bật/tắt riêng được trên mọi kiểu: kiểu 108 phím dùng lại lựa chọn đã nhớ (mặc định tắt)
+    // Bàn tay bật/tắt riêng được trên mọi kiểu; đổi sang kiểu bàn phím nào cũng mặc định bật lại
     if (theme.isHandsGuideTheme) {
       setSettings((s) => ({ ...s, handsOverlayEnabled: true, handsVisible: true }));
       return;
     }
-    setSettings((s) => ({ ...s, handsOverlayEnabled: false, handsVisible: !!s.handsOnRealKeyboards }));
+    // Chọn bàn phím nào cũng mặc định BẬT bàn tay ngón tay ảo (tắt được bằng nút "Bàn tay" trong hộp này)
+    setSettings((s) => ({ ...s, handsOverlayEnabled: false, handsVisible: true, handsOnRealKeyboards: true }));
     setCurrentKeyboardTheme(theme);
     try {
       localStorage.setItem('typing_kids_keyboard_theme', theme.id);
@@ -637,7 +638,7 @@ export default function App() {
       const parsed = saved ? JSON.parse(saved) : null;
       // Ghép với mặc định để cài đặt cũ thiếu trường mới vẫn chạy đúng
       // Mỗi lần mở phần mềm luôn bắt đầu bằng bàn phím có bàn tay hướng dẫn (học sinh có thể đổi trong "Đổi Phím")
-      if (parsed && typeof parsed === 'object') return { ...DEFAULT_APP_SETTINGS, ...parsed, handsOverlayEnabled: true, handsVisible: true };
+      if (parsed && typeof parsed === 'object') return { ...DEFAULT_APP_SETTINGS, ...parsed, handsOverlayEnabled: true, handsVisible: true, handsOnRealKeyboards: true };
     } catch {
       // Fallback
     }
@@ -2164,7 +2165,7 @@ export default function App() {
 
         {/* CỤM 3 (HỌC SINH): Đổi phím, Trò chơi, Âm thanh, Toàn màn hình.
             Mọi công cụ & cài đặt của giáo viên gom vào 1 nút "Giáo viên" – bấm mới sổ ra. */}
-        <div className="flex flex-wrap items-center justify-end gap-1.5 max-w-full">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5 max-w-full">
           <button
             type="button"
             onClick={() => setIsThemeModalOpen(true)}
@@ -2240,8 +2241,19 @@ export default function App() {
       {/* ======================================================== */}
       {/* 2. NOTIFICATION BANNER: TINH GỌN 1 DÒNG (HEIGHT ~24px)   */}
       {/* ======================================================== */}
-      {currentGradeHomework && assignedLessonsList.length > 0 && (
-        <div className="min-h-[34px] w-full bg-gradient-to-r from-emerald-600 via-teal-600 to-sky-600 text-white px-2.5 sm:px-4 py-0.5 flex items-center justify-between text-sm font-bold shrink-0 border-b border-white/20 select-none overflow-hidden">
+      {(() => {
+        const hasHomework = !!currentGradeHomework && assignedLessonsList.length > 0;
+        return (
+        <div
+          data-testid="top-strip"
+          className={`min-h-[34px] w-full px-2.5 sm:px-4 py-0.5 flex items-center justify-between gap-2 text-sm font-bold shrink-0 border-b select-none overflow-hidden ${
+            hasHomework
+              ? 'bg-gradient-to-r from-emerald-600 via-teal-600 to-sky-600 text-white border-white/20'
+              : 'bg-white/70 text-slate-700 border-sky-100'
+          }`}
+        >
+          {hasHomework && currentGradeHomework ? (
+          <>
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="shrink-0 text-xs">🔔</span>
             <span className="shrink-0 text-sm">
@@ -2277,8 +2289,28 @@ export default function App() {
               );
             })}
           </div>
+          </>
+          ) : (
+            <span className="min-w-0 truncate text-sm text-slate-600 font-semibold">
+              👩‍🏫 Thầy cô muốn dùng vai trò Giáo viên (soạn bài, giao bài)? Bấm thông tin tác giả bên phải để liên hệ.
+            </span>
+          )}
+
+          {/* THÔNG TIN TÁC GIẢ: ngay dưới nút Giáo viên, bấm mở trang tác giả (liên hệ, ủng hộ) */}
+          <button
+            type="button"
+            data-testid="top-author-button"
+            onClick={() => setIsAuthorDonateModalOpen(true)}
+            className="ml-auto shrink-0 min-h-[30px] px-2.5 rounded-lg flex items-center gap-1.5 cursor-pointer bg-gradient-to-r from-amber-200 to-orange-200 hover:from-amber-300 hover:to-orange-300 text-amber-950 border border-amber-400 shadow-2xs transition-colors whitespace-nowrap"
+            title="Liên hệ tác giả Nguyễn Thanh Liêm (Zalo 0888358363) để được dùng vai trò Giáo viên • Ủng hộ tác giả"
+          >
+            <span className="font-black text-sm">👨‍🏫 Tác giả: Nguyễn Thanh Liêm</span>
+            <span className="font-black text-sm hidden min-[1200px]:inline">• Zalo 0888358363</span>
+            <span className="bg-amber-600 text-white text-xs font-black px-1.5 py-0.5 rounded-md">☕ Ủng hộ</span>
+          </button>
         </div>
-      )}
+        );
+      })()}
 
       {/* ======================================================== */}
       {/* 3. MAIN WORKSPACE: FIT-TO-SCREEN 1366x768 (NO SCROLLING) */}
@@ -2430,17 +2462,6 @@ export default function App() {
                 </span>
               </div>
 
-              <div className="flex items-center gap-2 font-bold text-[10px] shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setIsAuthorDonateModalOpen(true)}
-                  className="text-amber-950 hover:text-black font-black flex items-center gap-1 cursor-pointer bg-gradient-to-r from-amber-200 to-orange-200 hover:from-amber-300 hover:to-orange-300 px-1.5 py-0.2 rounded-md border border-amber-300 transition-all shadow-2xs shrink-0"
-                  title="Thông tin tác giả Nguyễn Thanh Liêm - Trường TH số 1 Tân Uyên | STK BIDV: 0977058363 | Donate cà phê"
-                >
-                  <span>👨‍🏫 Tác giả: Nguyễn Thanh Liêm</span>
-                  <span className="bg-amber-600 text-white text-[11px] px-1.5 rounded-sm">☕ Ủng hộ</span>
-                </button>
-              </div>
             </footer>
           </div>
 

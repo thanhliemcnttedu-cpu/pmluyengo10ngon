@@ -89,13 +89,14 @@ export function computeSmartViewportMetrics(
 
   // 2. Tự động tính toán chiều cao khung Văn Bản Mẫu SGK (SGK Box)
   // Đảm bảo hiển thị từ 2 đến 4 dòng tùy theo chiều cao máy, tự động cuộn mượt theo dòng bé đang gõ
-  let sgkBoxHeight = 118;
+  // Màn thấp: khung chữ mẫu thấp bớt (vẫn tự cuộn theo dòng đang gõ) để BÀN PHÍM luôn hiện đủ, phím đủ to
+  let sgkBoxHeight = 108;
   if (isUltraCompactHeight) {
-    sgkBoxHeight = 66; // 2 dòng cô đọng, tự cuộn mượt
-  } else if (winHeight <= 660) {
-    sgkBoxHeight = 84; // 2-3 dòng vừa vặn cho màn hình laptop 1366x768
-  } else if (isCompactHeight) {
-    sgkBoxHeight = 98; // 3 dòng rõ nét
+    sgkBoxHeight = 62; // 2 dòng cô đọng, tự cuộn mượt
+  } else if (winHeight <= 700) {
+    sgkBoxHeight = 70; // 2 dòng: laptop 1366x768 / 1280x800 khi trình duyệt có thanh địa chỉ, tab
+  } else if (winHeight <= 780) {
+    sgkBoxHeight = 88; // 2-3 dòng: laptop 1366x768 toàn màn hình
   } else if (winHeight >= 850 || isWideDesktop) {
     sgkBoxHeight = 156; // Màn hình lớn Full HD 1920x1080 hoành tráng 4-5 dòng
   }

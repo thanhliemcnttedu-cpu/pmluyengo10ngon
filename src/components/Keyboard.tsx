@@ -104,6 +104,11 @@ export const Keyboard: React.FC<KeyboardProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [unitSize, setUnitSize] = useState<number>(40);
   const [keyHeight, setKeyHeight] = useState<number>(46);
+  // Chiều cao phím theo công thức (trần khi nâng lại); fitPassRef: đếm số lần căn để chống lặp
+  const baseKeyHeightRef = useRef<number>(46);
+  const fitPassRef = useRef(0);
+  // Tăng mỗi lần tính lại kích thước: buộc bước "căn cho vừa khung" chạy lại kể cả khi số đo phím không đổi
+  const [fitTick, setFitTick] = useState(0);
 
   // Tự động tính toán kích thước phím (U) theo chiều ngang container & chiều cao viewport
   // Mở rộng chiều cao các phím to rõ, trực quan, loại bỏ khoảng trống thừa và vừa khít màn hình 1366x768
@@ -111,6 +116,8 @@ export const Keyboard: React.FC<KeyboardProps> = ({
     if (!containerRef.current) return;
     const calculateSize = () => {
       if (!containerRef.current) return;
+      fitPassRef.current = 0;
+      setFitTick((t) => t + 1);
       const width = containerRef.current.clientWidth;
       if (width <= 0) return;
 
@@ -128,7 +135,8 @@ export const Keyboard: React.FC<KeyboardProps> = ({
         const keyHByH = Math.floor((availH - 22 - 4 * 6) / 5);
         const u = Math.max(26, Math.min(120, unitByW));
         setUnitSize(u);
-        setKeyHeight(Math.max(26, Math.min(96, Math.round(u * 0.78), keyHByH)));
+        baseKeyHeightRef.current = Math.max(26, Math.min(96, Math.round(u * 0.78), keyHByH));
+        setKeyHeight(baseKeyHeightRef.current);
         return;
       }
       // Total keyboard width: 22.7 * unitSize + 76px
@@ -171,18 +179,73 @@ export const Keyboard: React.FC<KeyboardProps> = ({
         computedHeight = Math.min(computedHeight, suggestedKeyHeight);
       }
 
-      setKeyHeight(Math.max(22, Math.min(68, computedHeight)));
+      baseKeyHeightRef.current = Math.max(22, Math.min(68, computedHeight));
+      setKeyHeight(baseKeyHeightRef.current);
     };
 
     calculateSize();
-    const ro = new ResizeObserver(calculateSize);
+    // Chỉ tính lại khi BỀ NGANG bàn phím đổi, hoặc khi KHUNG CHỨA (section) đổi kích thước.
+    // Không tính lại theo chiều cao của chính bàn phím: bước "thu cho vừa khung" bên dưới
+    // làm bàn phím thấp đi, nếu tính lại theo đó sẽ phóng – thu lặp mãi.
+    let lastW = containerRef.current.clientWidth;
+    const ro = new ResizeObserver(() => {
+      const w = containerRef.current?.clientWidth ?? 0;
+      if (w !== lastW) {
+        lastW = w;
+        calculateSize();
+      }
+    });
     ro.observe(containerRef.current);
+    const host = containerRef.current.parentElement;
+    let lastHostH = host?.clientHeight ?? 0;
+    const roHost = new ResizeObserver(() => {
+      const h = host?.clientHeight ?? 0;
+      if (Math.abs(h - lastHostH) > 1) {
+        lastHostH = h;
+        calculateSize();
+      }
+    });
+    if (host) roHost.observe(host);
     window.addEventListener('resize', calculateSize);
     return () => {
       ro.disconnect();
+      roHost.disconnect();
       window.removeEventListener('resize', calculateSize);
     };
   }, [isCompactHeight, maxUnitSize, suggestedKeyHeight, guideMode]);
+
+  // LUÔN HIỆN ĐỦ BÀN PHÍM: sau khi vẽ, đo bàn phím thật so với khung còn trống (section bao ngoài).
+  // Ước lượng theo chiều cao cửa sổ ở trên không biết dải "Mẹo nhỏ", thanh bài giao, ảnh SGK…
+  // nên có khi hàng Ctrl/Space bị che. Bị tràn bao nhiêu thì hạ chiều cao phím bấy nhiêu.
+  useEffect(() => {
+    // Phím có hiệu ứng đổi cỡ (transition) nên đo NGAY sẽ ra chiều cao cũ -> thu quá tay.
+    // Đợi hiệu ứng chạy xong (~150ms) rồi mới đo.
+    const timer = window.setTimeout(() => {
+      const el = containerRef.current;
+      const host = el?.parentElement;
+      if (!el || !host) return;
+      // Màn dọc máy tính bảng: khung cao theo nội dung (không giới hạn) nên không cần thu
+      if (parseFloat(getComputedStyle(host).flexGrow || '0') <= 0) return;
+      const avail = host.clientHeight;
+      // Khung ngoài có overflow nên bị ép bằng khung chứa: đo khung bàn phím bên trong (+ đệm dưới)
+      const frame = el.firstElementChild as HTMLElement | null;
+      if (!frame) return;
+      const need = frame.offsetHeight + parseFloat(getComputedStyle(el).paddingBottom || '0');
+      if (avail <= 0) return;
+      const rows = guideMode ? 5 : 5.76;
+      // Tràn: hạ phím đủ để vừa. Thừa chỗ (do lần trước hạ quá tay): nâng lại, không vượt cỡ chuẩn.
+      const delta = need > avail ? -Math.ceil((need - avail) / rows) : Math.floor((avail - need - 2) / rows);
+      if (delta === 0) return;
+      // Chống lặp: mỗi lần tính lại kích thước chỉ cho căn tối đa 8 lần
+      if (fitPassRef.current >= 8) return;
+      fitPassRef.current += 1;
+      setKeyHeight((kh) => {
+        const next = Math.max(20, Math.min(baseKeyHeightRef.current, kh + delta));
+        return next === kh ? kh : next;
+      });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [keyHeight, unitSize, guideMode, isCompactHeight, fitTick]);
 
   useEffect(() => {
     const handleKeyToggle = (e: KeyboardEvent) => {
@@ -584,7 +647,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
   };
 
   return (
-    <div ref={containerRef} className="w-full mx-auto overflow-x-auto pb-1 custom-scrollbar">
+    <div ref={containerRef} className="w-full mx-auto overflow-x-auto overflow-y-hidden pb-1 custom-scrollbar">
       {/* Keyboard Outer 3D Playful Frame - Spans 100% full width to eliminate blank gaps */}
       <div
         className={`w-full relative ${

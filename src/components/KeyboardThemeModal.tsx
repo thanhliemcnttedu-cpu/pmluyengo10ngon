@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useLayoutEffect, useRef } from 'react';
 import { KeyboardSkinTheme, KEYBOARD_THEMES } from '../data/keyboardThemes';
 import { KeyboardPreviewCard } from './KeyboardPreviewCard';
 import { X, Sparkles, Monitor, Cpu, CheckCircle2 } from 'lucide-react';
@@ -26,6 +26,64 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
 }) => {
   const [filterTab, setFilterTab] = useState<'all' | 'hands' | 'real' | 'system'>('all');
 
+  // VỪA MÀN HÌNH: từ 768px trở lên, cả hộp hiện trọn không cuộn — đo kích thước thật rồi phóng/thu theo tỉ lệ
+  const panelRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const el = panelRef.current;
+    if (!el) return;
+    // Không cho zoom "trượt dần" theo hiệu ứng (đo sai)
+    el.style.transitionProperty = 'opacity, transform';
+    const fit = () => {
+      el.style.zoom = '1';
+      el.style.width = '';
+      el.style.maxWidth = '';
+      if (window.innerWidth < 768) return; // màn hẹp: giữ cỡ gốc, cuộn trong hộp
+      const parent = el.parentElement;
+      const cs = parent ? getComputedStyle(parent) : null;
+      const availW = (parent && cs ? parent.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) : window.innerWidth) - 4;
+      const availH = window.innerHeight * 0.96;
+      // Thử vài bề rộng bố cục: rộng hơn thì thẻ ít xuống dòng nên hộp thấp hơn.
+      // Chọn bề rộng cho tỉ lệ phóng lớn nhất (chữ to nhất) mà cả hộp vẫn vừa màn hình.
+      el.style.maxWidth = 'none';
+      el.style.flexShrink = '0'; // không để khung cha ép co lại khi thử bề rộng lớn
+      let best = { z: 0, w: availW };
+      for (const k of [1, 1.15, 1.3, 1.45, 1.6, 1.8]) {
+        const w = Math.round(availW * k);
+        el.style.width = `${w}px`;
+        const h = el.offsetHeight;
+        if (!h) continue;
+        const z = Math.min(1.2, availW / w, availH / h);
+        if (z > best.z + 0.005) best = { z, w };
+      }
+      el.style.width = `${best.w}px`;
+      el.style.zoom = Math.abs(best.z - 1) > 0.01 ? best.z.toFixed(3) : '1';
+      // Kiểm lại sau khi phóng (chữ có thể xuống dòng khác đi): còn lố màn hình thì thu thêm cho vừa
+      const r = el.getBoundingClientRect();
+      const limitH = window.innerHeight * 0.98;
+      if (r.height > limitH) {
+        el.style.zoom = ((best.z * limitH) / r.height).toFixed(3);
+      }
+    };
+    let raf = 0;
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(fit);
+    };
+    fit();
+    schedule();
+    // Ảnh/phông nạp xong có thể đổi chiều cao: đo lại (không dùng ResizeObserver vì chính zoom làm đổi cỡ -> lặp)
+    el.addEventListener('load', schedule, true);
+    const late = window.setTimeout(schedule, 400);
+    window.addEventListener('resize', schedule);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(late);
+      el.removeEventListener('load', schedule, true);
+      window.removeEventListener('resize', schedule);
+    };
+  }, [isOpen, filterTab]);
+
   if (!isOpen) return null;
 
   const handsGuideTheme = KEYBOARD_THEMES.find((t) => t.isHandsGuideTheme);
@@ -39,9 +97,13 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-6xl max-h-[94vh] bg-white border-4 border-sky-400 rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+      <div
+        ref={panelRef}
+        data-testid="theme-modal-panel"
+        className="relative w-full max-w-6xl xl:max-w-[1400px] max-h-[94vh] md:max-h-none bg-white border-4 border-sky-400 rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+      >
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b-2 border-sky-200 bg-gradient-to-r from-sky-100 via-indigo-50 to-amber-100">
+        <div className="flex items-center justify-between px-5 py-2.5 border-b-2 border-sky-200 bg-gradient-to-r from-sky-100 via-indigo-50 to-amber-100">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-sky-600 via-indigo-600 to-amber-500 p-0.5 shadow-md flex items-center justify-center text-2xl select-none">
               ⌨️
@@ -74,11 +136,13 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
           </button>
         </div>
 
+        {/* Hàng 2 cột (màn rộng): bật/tắt bàn tay | bàn phím có hướng dẫn tay gõ — gọn chiều cao để cả hộp vừa màn hình */}
+        <div className="md:grid md:grid-cols-2 md:items-stretch">
         {/* BẬT/TẮT BÀN TAY HƯỚNG DẪN: dùng được cho mọi kiểu bàn phím */}
         {onToggleHands && (
           <div
             data-testid="theme-hands-row"
-            className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-sky-200 bg-white"
+            className="flex flex-wrap items-center justify-between gap-3 px-5 py-2 border-b border-sky-200 bg-white"
           >
             <div className="min-w-0">
               <p className="text-base font-black text-slate-900">✋ Bàn tay hướng dẫn gõ</p>
@@ -106,7 +170,7 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
 
         {/* FEATURED SPOTLIGHT HERO CARD: BÀN PHÍM CÓ HƯỚNG DẪN TAY GÕ */}
         {handsGuideTheme && (
-          <div className="px-5 py-3 bg-gradient-to-r from-sky-900 via-indigo-950 to-slate-950 text-white border-b-2 border-sky-400 flex items-center justify-between gap-4 flex-wrap">
+          <div className="px-5 py-2 bg-gradient-to-r from-sky-900 via-indigo-950 to-slate-950 text-white border-b-2 border-sky-400 flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3">
               <span className="text-3xl animate-bounce">👐</span>
               <div>
@@ -137,9 +201,10 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
             </button>
           </div>
         )}
+        </div>
 
         {/* Motivational Info Bar & Filter Tabs */}
-        <div className="px-5 py-2.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
+        <div className="px-5 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
           {/* Filter Tabs */}
           <div className="flex items-center gap-1.5 bg-white p-1 rounded-2xl border border-slate-200 shadow-xs flex-wrap">
             <button
@@ -198,8 +263,9 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
         </div>
 
         {/* Grid of Keyboards */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-50/50">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* Màn từ 768px: hiện trọn lưới (không cuộn), cả hộp được phóng/thu cho vừa màn hình */}
+        <div className="flex-1 overflow-y-auto md:overflow-visible md:flex-none p-3 sm:p-4 bg-slate-50/50">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
             {filteredThemes.map((theme) => (
               <KeyboardPreviewCard
                 key={theme.id}
@@ -215,7 +281,7 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="px-5 py-3 border-t-2 border-slate-200 bg-white flex items-center justify-between gap-3 flex-wrap">
+        <div className="px-5 py-2 border-t-2 border-slate-200 bg-white flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2 text-xs text-slate-600 font-bold">
             <CheckCircle2 className="w-4 h-4 text-emerald-600" />
             <span>Bàn phím thật ngoài đời giúp học sinh làm quen tự nhiên với máy vi tính ở trường và gia đình!</span>
