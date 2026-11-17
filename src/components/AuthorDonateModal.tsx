@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import QRCode from 'qrcode';
 import {
   X,
   Coffee,
@@ -55,6 +56,11 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
   const [selectedAmount, setSelectedAmount] = useState<number>(20000);
   const [imgLoadError, setImgLoadError] = useState<boolean>(false);
   const [copyFailed, setCopyFailed] = useState<boolean>(false);
+  // Mã QR phóng to giữa màn hình: rê chuột (tạm thời) hoặc bấm (giữ nguyên, có nút đóng)
+  const [bigQr, setBigQr] = useState<{ src: string; title: string; note: string; link?: string; linkLabel?: string } | null>(null);
+  const [bigQrPinned, setBigQrPinned] = useState<boolean>(false);
+  // Mã QR Zalo tạo ngay trên máy (thư viện qrcode), không gọi dịch vụ ngoài
+  const [zaloQr, setZaloQr] = useState<Record<string, string>>({});
 
   // THÔNG TIN TÁC GIẢ & TÀI KHOẢN BIDV CHÍNH THỨC
   const authorName = 'Nguyễn Thanh Liêm';
@@ -101,6 +107,82 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
     setImgLoadError(false);
   }, [selectedAmount]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    let alive = true;
+    Promise.all(
+      [contactPhone1Raw, contactPhone2Raw].map((p) =>
+        QRCode.toDataURL(`https://zalo.me/${p}`, { width: 640, margin: 2, errorCorrectionLevel: 'M' }).then((url) => [p, url] as const)
+      )
+    )
+      .then((pairs) => alive && setZaloQr(Object.fromEntries(pairs)))
+      .catch(() => {
+        // Không tạo được QR thì vẫn còn nút "Mở Zalo"
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isOpen]);
+
+  // VỪA MÀN HÌNH: phóng cả trang theo tỉ lệ (giữ bố cục 2 cột) cho đỡ trống, tối đa 1,5 lần
+  const panelRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const el = panelRef.current;
+    if (!el) return;
+    // Chỉ cho chuyển động độ mờ & phóng/thu, không cho zoom "trượt dần" làm đo sai
+    el.style.transitionProperty = 'opacity, transform';
+    const fit = () => {
+      el.style.zoom = '1';
+      // Màn hẹp (dưới 768px, 1 cột) giữ nguyên cỡ
+      if (window.innerWidth < 768) return;
+      const parent = el.parentElement;
+      const cs = parent ? getComputedStyle(parent) : null;
+      const availW = parent && cs ? parent.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) : window.innerWidth;
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      if (!w || !h) return;
+      const z = Math.min(1.5, (availW - 8) / w, (window.innerHeight * 0.94) / h);
+      el.style.zoom = z > 1.02 ? z.toFixed(3) : '1';
+    };
+    let raf = 0;
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(fit);
+    };
+    fit();
+    schedule();
+    window.addEventListener('resize', schedule);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', schedule);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!bigQr) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setBigQr(null);
+        setBigQrPinned(false);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [bigQr]);
+
+  const openZalo = (raw: string, pretty: string) => {
+    setBigQr({
+      src: zaloQr[raw] || '',
+      title: `Zalo: ${pretty}`,
+      note: 'Mở app Zalo trên điện thoại → Quét mã QR → nhắn tin cho tác giả',
+      link: `https://zalo.me/${raw}`,
+      linkLabel: 'Mở Zalo trên máy này',
+    });
+    setBigQrPinned(true);
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -109,6 +191,8 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
       onClick={onClose}
     >
       <div
+        ref={panelRef}
+        data-testid="author-panel"
         className="relative w-full max-w-2xl md:max-w-[min(96vw,1280px)] bg-white rounded-3xl shadow-2xl border-4 border-amber-400 overflow-hidden text-slate-800 animate-in zoom-in-95 duration-200 max-h-[96vh] flex flex-col"
         role="dialog"
         aria-modal="true"
@@ -199,7 +283,14 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
                   <Phone className="w-4 h-4 text-emerald-600 shrink-0" />
                   <div className="min-w-0">
                     <span className="text-[10px] text-slate-500 font-bold block">SĐT &amp; Zalo chính:</span>
-                    <span className="font-black text-slate-900 truncate block">{contactPhone1}</span>
+                    <button
+                      type="button"
+                      onClick={() => openZalo(contactPhone1Raw, contactPhone1)}
+                      className="font-black text-slate-900 truncate block hover:text-sky-700 hover:underline cursor-pointer text-left"
+                      title="Bấm để hiện mã QR Zalo"
+                    >
+                      {contactPhone1}
+                    </button>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
@@ -215,15 +306,16 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
                       <Copy className="w-3.5 h-3.5" />
                     )}
                   </button>
-                  <a
-                    href={`https://zalo.me/${contactPhone1Raw}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-1.5 py-0.8 rounded-lg bg-sky-500 hover:bg-sky-600 text-white font-black text-[10px] flex items-center gap-0.5 transition-colors"
+                  <button
+                    type="button"
+                    data-zalo={contactPhone1Raw}
+                    onClick={() => openZalo(contactPhone1Raw, contactPhone1)}
+                    className="px-1.5 py-0.8 rounded-lg bg-sky-500 hover:bg-sky-600 text-white font-black text-[10px] flex items-center gap-0.5 transition-colors cursor-pointer"
+                    title="Hiện mã QR Zalo và nút mở Zalo"
                   >
                     <MessageCircle className="w-3 h-3" />
                     <span>Zalo</span>
-                  </a>
+                  </button>
                 </div>
               </div>
 
@@ -233,7 +325,14 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
                   <Phone className="w-4 h-4 text-sky-600 shrink-0" />
                   <div className="min-w-0">
                     <span className="text-[10px] text-sky-700 font-bold block">SĐT &amp; Zalo (STK BIDV):</span>
-                    <span className="font-black text-sky-950 truncate block">{contactPhone2}</span>
+                    <button
+                      type="button"
+                      onClick={() => openZalo(contactPhone2Raw, contactPhone2)}
+                      className="font-black text-sky-950 truncate block hover:text-sky-700 hover:underline cursor-pointer text-left"
+                      title="Bấm để hiện mã QR Zalo"
+                    >
+                      {contactPhone2}
+                    </button>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
@@ -249,15 +348,16 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
                       <Copy className="w-3.5 h-3.5" />
                     )}
                   </button>
-                  <a
-                    href={`https://zalo.me/${contactPhone2Raw}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-1.5 py-0.8 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-black text-[10px] flex items-center gap-0.5 transition-colors"
+                  <button
+                    type="button"
+                    data-zalo={contactPhone2Raw}
+                    onClick={() => openZalo(contactPhone2Raw, contactPhone2)}
+                    className="px-1.5 py-0.8 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-black text-[10px] flex items-center gap-0.5 transition-colors cursor-pointer"
+                    title="Hiện mã QR Zalo và nút mở Zalo"
                   >
                     <MessageCircle className="w-3 h-3" />
                     <span>Zalo</span>
-                  </a>
+                  </button>
                 </div>
               </div>
             </div>
@@ -320,7 +420,43 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
               
               {/* CỘT MÃ QR BIDV CHÍNH XÁC */}
               <div className="lg:col-span-5 flex flex-col items-center justify-center bg-white p-3 rounded-2xl border-2 border-emerald-300 shadow-sm space-y-1.5">
-                <div className="relative w-44 h-44 sm:w-48 sm:h-48 md:w-40 md:h-40 lg:w-48 lg:h-48 max-w-full rounded-xl overflow-hidden bg-white flex items-center justify-center border border-slate-200 p-1">
+                <div
+                  data-testid="bank-qr"
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Phóng to mã QR ngân hàng"
+                  title="Rê chuột hoặc bấm để phóng to mã QR"
+                  onMouseEnter={() => {
+                    if (imgLoadError || bigQrPinned) return;
+                    setBigQr({
+                      src: vietQrUrl,
+                      title: `Ủng hộ ${selectedAmount.toLocaleString('vi-VN')}đ • BIDV ${accountNumberFormatted}`,
+                      note: 'Mở app ngân hàng → Quét QR (tự điền số tài khoản, người nhận & số tiền)',
+                    });
+                  }}
+                  onMouseLeave={() => {
+                    if (!bigQrPinned) setBigQr(null);
+                  }}
+                  onClick={() => {
+                    if (imgLoadError) return;
+                    setBigQr({
+                      src: vietQrUrl,
+                      title: `Ủng hộ ${selectedAmount.toLocaleString('vi-VN')}đ • BIDV ${accountNumberFormatted}`,
+                      note: 'Mở app ngân hàng → Quét QR (tự điền số tài khoản, người nhận & số tiền)',
+                    });
+                    setBigQrPinned(true);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      (e.currentTarget as HTMLDivElement).click();
+                    }
+                  }}
+                  className="relative w-44 h-44 sm:w-48 sm:h-48 md:w-40 md:h-40 lg:w-48 lg:h-48 max-w-full rounded-xl overflow-hidden bg-white flex items-center justify-center border border-slate-200 p-1 cursor-zoom-in group"
+                >
+                  <span className="pointer-events-none absolute bottom-1 right-1 z-10 bg-slate-900/75 text-white text-[10px] font-black px-1.5 py-0.5 rounded-md opacity-80 group-hover:opacity-100">
+                    🔍 Phóng to
+                  </span>
                   {!imgLoadError ? (
                     <img
                       src={vietQrUrl}
@@ -485,6 +621,64 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
           </button>
         </div>
       </div>
+
+      {/* MÃ QR PHÓNG TO GIỮA MÀN HÌNH */}
+      {bigQr && (
+        <div
+          data-testid="big-qr"
+          className={`fixed inset-0 z-[60] flex items-center justify-center p-4 ${bigQrPinned ? 'bg-slate-950/70' : 'pointer-events-none'}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (bigQrPinned) {
+              setBigQr(null);
+              setBigQrPinned(false);
+            }
+          }}
+        >
+          <div
+            // Chỉ rê chuột: khung không nhận chuột, nếu không nó che ô QR nhỏ -> "rời chuột" -> tắt ngay (nhấp nháy)
+            className={`${bigQrPinned ? 'pointer-events-auto' : 'pointer-events-none'} bg-white rounded-3xl border-4 border-emerald-400 shadow-2xl p-[clamp(12px,2vh,24px)] flex flex-col items-center gap-2 max-w-[94vw]`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="font-black text-slate-900 text-center text-[clamp(1rem,2.2vh,1.5rem)]">{bigQr.title}</p>
+            {bigQr.src ? (
+              <img
+                src={bigQr.src}
+                alt={bigQr.title}
+                className="w-[min(70vh,80vw,640px)] h-[min(70vh,80vw,640px)] object-contain bg-white"
+              />
+            ) : (
+              <div className="w-[min(50vh,80vw)] h-[min(50vh,80vw)] flex items-center justify-center text-slate-500 font-bold">Đang tạo mã QR…</div>
+            )}
+            <p className="text-slate-600 font-semibold text-center text-[clamp(0.85rem,1.8vh,1.15rem)] max-w-[60ch]">{bigQr.note}</p>
+            {bigQrPinned && (
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                {bigQr.link && (
+                  <a
+                    href={bigQr.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="min-h-[44px] px-5 rounded-full bg-sky-600 hover:bg-sky-500 text-white font-black flex items-center gap-1.5"
+                  >
+                    <MessageCircle className="w-5 h-5" />
+                    {bigQr.linkLabel}
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBigQr(null);
+                    setBigQrPinned(false);
+                  }}
+                  className="min-h-[44px] px-5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-800 font-black cursor-pointer"
+                >
+                  Đóng
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
