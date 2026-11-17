@@ -28,7 +28,8 @@ interface KeyboardProps {
   targetPressNumber?: number;
   targetPressTotal?: number;
   onKeyClick?: (key: KeyConfig) => void;
-  handsOverlayEnabled: boolean;
+  handsOverlayEnabled: boolean; // kiểu bàn phím hướng dẫn (bố cục phím to, chỉ khu vực chính)
+  handsVisible?: boolean; // hiện bàn tay (mọi kiểu bàn phím); bỏ trống = theo handsOverlayEnabled
   handsOpacity: number;
   handsStyle: HandDisplayStyle;
   showFingerDots?: boolean;
@@ -67,6 +68,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
   targetPressTotal = 1,
   onKeyClick,
   handsOverlayEnabled,
+  handsVisible,
   handsOpacity,
   handsStyle,
   showFingerDots = true,
@@ -83,6 +85,8 @@ export const Keyboard: React.FC<KeyboardProps> = ({
   // CHẾ ĐỘ BÀN TAY HƯỚNG DẪN: chỉ hiện khối phím chính, phím to, phẳng, sáng màu để
   // ngón tay mô phỏng đặt lên rõ ràng (học sinh nhìn thấy ngón nào đi tới phím nào)
   const guideMode = handsOverlayEnabled;
+  // Bàn 108 phím cũng hiện được bàn tay: lớp bàn tay nằm trong khu vực chính nên chỉ vẽ trên vùng đó
+  const showHands = handsVisible ?? handsOverlayEnabled;
   // Phím Shift cần giữ theo quy tắc tay đối diện: phím do tay phải bấm -> Shift trái và ngược lại
   const guideShiftCode =
     symbolGuideInfo?.targetShiftCodes?.[0] ??
@@ -543,7 +547,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
             guideMode
               ? // Viền sáng quanh chữ: chữ trên phím vẫn đọc rõ khi ngón tay ảo đè lên
                 `${guideTypography(key, unitSize)} relative z-[36] [text-shadow:0_0_2px_#fff,0_0_4px_#fff,0_0_6px_#fff]`
-              : getKeyTypographyClass(key, customHeight)
+              : `${getKeyTypographyClass(key, customHeight)}${showHands ? ' relative z-[36]' : ''}`
           } ${
             guideMode
               ? ''
@@ -738,7 +742,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
 
               {/* Hands Overlay covering the Main ANSI section perfectly */}
               <KeyHandsOverlay
-                visible={handsOverlayEnabled}
+                visible={showHands}
                 opacity={handsOpacity}
                 style={handsStyle}
                 // Ký hiệu cần Shift (!, @, *...): phím gốc lấy từ bảng ký hiệu

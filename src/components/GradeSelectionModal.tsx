@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { GradeAssignment } from '../types/typing';
 import { soundEngine } from '../utils/audio';
 import confetti from 'canvas-confetti';
+import { AuthorCredit } from './AuthorCredit';
 import {
   Sparkles,
   GraduationCap,
@@ -25,6 +26,7 @@ interface GradeSelectionModalProps {
   gradeAssignments?: Record<number, GradeAssignment>;
   /** Mở Sổ tay hướng dẫn gõ ngay trên bảng chọn lớp (học sinh chưa biết cách gõ) */
   onOpenTypingGuide?: () => void;
+  onOpenAuthor?: () => void;
 }
 
 export const GradeSelectionModal: React.FC<GradeSelectionModalProps> = ({
@@ -34,6 +36,7 @@ export const GradeSelectionModal: React.FC<GradeSelectionModalProps> = ({
   currentGrade,
   gradeAssignments = {},
   onOpenTypingGuide,
+  onOpenAuthor,
 }) => {
   const [isClosing, setIsClosing] = useState<boolean>(false);
   const [hoveredGrade, setHoveredGrade] = useState<number | null>(null);
@@ -86,7 +89,7 @@ export const GradeSelectionModal: React.FC<GradeSelectionModalProps> = ({
       // Giữ bề rộng bố cục đúng 1024px (max-w-5xl) để chữ không bị ép xuống dòng,
       // và chiều cao sau khi phóng không quá 88% màn hình
       const z = Math.min(1.6, (availW - 12) / PANEL_BASE_WIDTH, // trừ 12px: tránh làm tròn số lẻ làm chữ xuống dòng
-         (window.innerHeight * 0.88) / h); // 0,88: chừa chỗ cho hiệu ứng phóng 95%→100% lúc mở
+         (window.innerHeight * 0.82) / h); // 0,88: chừa chỗ cho hiệu ứng phóng 95%→100% lúc mở
       el.style.zoom = z > 1.02 ? z.toFixed(3) : '1';
     };
     // Tính lại ở khung hình kế tiếp (lúc kích thước đã ổn định) khi cửa sổ hoặc lớp phủ đổi cỡ
@@ -161,7 +164,7 @@ export const GradeSelectionModal: React.FC<GradeSelectionModalProps> = ({
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/75 backdrop-blur-md transition-opacity duration-200 ${
+      className={`fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 p-3 sm:p-5 bg-slate-950/75 backdrop-blur-md transition-opacity duration-200 ${
         isClosing ? 'opacity-0' : 'opacity-100 animate-in fade-in duration-200'
       }`}
       onClick={(e) => {
@@ -487,6 +490,7 @@ export const GradeSelectionModal: React.FC<GradeSelectionModalProps> = ({
           </div>
         </div>
       </div>
+      {onOpenAuthor && <AuthorCredit onClick={onOpenAuthor} />}
     </div>
   );
 };

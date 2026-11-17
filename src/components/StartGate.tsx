@@ -3,6 +3,7 @@
 // Giúp học sinh có thời gian chuẩn bị tay, đồng hồ chỉ chạy khi các em thật sự bắt đầu gõ.
 // ============================================================================
 import React from 'react';
+import { AuthorCredit } from './AuthorCredit';
 
 interface StartGateProps {
   phase: 'ready' | 'countdown';
@@ -11,9 +12,10 @@ interface StartGateProps {
   onStart: () => void;
   /** Mở danh sách bài để học sinh đổi bài trước khi bắt đầu */
   onChooseLesson?: () => void;
+  onOpenAuthor?: () => void;
 }
 
-export const StartGate: React.FC<StartGateProps> = ({ phase, count, lessonTitle, onStart, onChooseLesson }) => (
+export const StartGate: React.FC<StartGateProps> = ({ phase, count, lessonTitle, onStart, onChooseLesson, onOpenAuthor }) => (
   <div
     className="absolute inset-0 z-[45] flex items-center justify-center bg-white/70 backdrop-blur-[3px] rounded-2xl"
     data-testid="start-gate"
@@ -56,6 +58,9 @@ export const StartGate: React.FC<StartGateProps> = ({ phase, count, lessonTitle,
       >
         {count === 0 ? 'GÕ!' : count}
       </div>
+    )}
+    {phase === 'ready' && onOpenAuthor && (
+      <AuthorCredit onClick={onOpenAuthor} tone="dark" className="absolute bottom-3 left-4" />
     )}
     <style>{`
       @keyframes startgate-pop { 0% { transform: scale(.4); opacity: 0 } 40% { transform: scale(1.1); opacity: 1 } 100% { transform: scale(1); opacity: 1 } }

@@ -1,24 +1,26 @@
 import React from 'react';
 import { X, CheckCircle2 } from 'lucide-react';
+import { AuthorCredit } from './AuthorCredit';
 
 interface UnikeyNoticeModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onOpenAuthor?: () => void;
 }
 
-export const UnikeyNoticeModal: React.FC<UnikeyNoticeModalProps> = ({ isOpen, onClose }) => {
+export const UnikeyNoticeModal: React.FC<UnikeyNoticeModalProps> = ({ isOpen, onClose, onOpenAuthor }) => {
   if (!isOpen) return null;
 
   return (
     <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in duration-200"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       {/* Hộp TO, co giãn theo màn hình (cỡ chữ dùng clamp theo vw/vh) để học sinh đọc rõ từ cuối lớp */}
       <div
-        className="relative w-[min(94vw,1280px)] bg-gradient-to-b from-amber-50 via-white to-sky-50 rounded-[32px] shadow-2xl border-[6px] border-amber-300 max-h-[94vh] overflow-y-auto text-slate-800 animate-in zoom-in-95 duration-200"
+        className="relative w-[min(94vw,1280px)] bg-gradient-to-b from-amber-50 via-white to-sky-50 rounded-[32px] shadow-2xl border-[6px] border-amber-300 max-h-[88vh] overflow-y-auto text-slate-800 animate-in zoom-in-95 duration-200"
         role="dialog"
         aria-modal="true"
         aria-labelledby="unikey-notice-title"
@@ -93,6 +95,7 @@ export const UnikeyNoticeModal: React.FC<UnikeyNoticeModalProps> = ({ isOpen, on
           `}</style>
         </div>
       </div>
+      {onOpenAuthor && <AuthorCredit onClick={onOpenAuthor} />}
     </div>
   );
 };

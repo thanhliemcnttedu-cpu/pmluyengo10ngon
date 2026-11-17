@@ -109,7 +109,7 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border-4 border-amber-400 overflow-hidden text-slate-800 animate-in zoom-in-95 duration-200 max-h-[96vh] flex flex-col"
+        className="relative w-full max-w-2xl md:max-w-[min(96vw,1280px)] bg-white rounded-3xl shadow-2xl border-4 border-amber-400 overflow-hidden text-slate-800 animate-in zoom-in-95 duration-200 max-h-[96vh] flex flex-col"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -142,13 +142,15 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
         {/* ======================================================== */}
         {/* THÂN MODAL (SCROLLABLE CONTAINER)                        */}
         {/* ======================================================== */}
-        <div className="p-3.5 sm:p-5 overflow-y-auto space-y-3.5 text-slate-800 custom-scrollbar flex-1 bg-gradient-to-b from-amber-50/50 via-white to-orange-50/30">
+        <div data-testid="author-body" className="p-3.5 sm:p-5 overflow-y-auto space-y-3.5 md:space-y-0 md:grid md:grid-cols-2 md:gap-4 md:items-start text-slate-800 custom-scrollbar flex-1 min-h-0 bg-gradient-to-b from-amber-50/50 via-white to-orange-50/30">
           {copyFailed && (
             <div role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">
               Trình duyệt không cho sao chép tự động. Hãy bôi đen và chép tay thông tin bên dưới.
             </div>
           )}
           
+          {/* CỘT TRÁI (màn rộng): lời ngỏ + thông tin liên hệ */}
+          <div className="space-y-3.5">
           {/* Lời ngỏ chân thành của tác giả */}
           <div className="bg-gradient-to-r from-amber-100/90 to-orange-100/80 border-2 border-amber-400 rounded-2xl p-3 sm:p-4 shadow-2xs flex items-start gap-3">
             <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 text-white flex items-center justify-center text-xl shrink-0 shadow-xs border-2 border-white">
@@ -190,7 +192,7 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
             </div>
 
             {/* Các kênh liên hệ: SĐT & Zalo */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-2 text-xs">
               {/* SĐT 1 */}
               <div className="flex items-center justify-between p-2 rounded-xl bg-slate-50 border border-slate-200">
                 <div className="flex items-center gap-2 min-w-0">
@@ -261,6 +263,8 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
             </div>
           </div>
 
+          </div>
+
           {/* ======================================================== */}
           {/* KHỐI DONATE CÀ PHÊ: MÃ QR BIDV CHÍNH XÁC & CHI TIẾT TÀI KHOẢN */}
           {/* ======================================================== */}
@@ -312,11 +316,11 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
             </div>
 
             {/* Chi tiết tài khoản ngân hàng BIDV & Mã QR chính xác */}
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-center">
               
               {/* CỘT MÃ QR BIDV CHÍNH XÁC */}
-              <div className="md:col-span-5 flex flex-col items-center justify-center bg-white p-3 rounded-2xl border-2 border-emerald-300 shadow-sm space-y-1.5">
-                <div className="relative w-44 h-44 sm:w-48 sm:h-48 max-w-full rounded-xl overflow-hidden bg-white flex items-center justify-center border border-slate-200 p-1">
+              <div className="lg:col-span-5 flex flex-col items-center justify-center bg-white p-3 rounded-2xl border-2 border-emerald-300 shadow-sm space-y-1.5">
+                <div className="relative w-44 h-44 sm:w-48 sm:h-48 md:w-40 md:h-40 lg:w-48 lg:h-48 max-w-full rounded-xl overflow-hidden bg-white flex items-center justify-center border border-slate-200 p-1">
                   {!imgLoadError ? (
                     <img
                       src={vietQrUrl}
@@ -345,7 +349,7 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
               </div>
 
               {/* CỘT THÔNG TIN VĂN BẢN VÀ CÁC NÚT SAO CHÉP NHANH */}
-              <div className="md:col-span-7 space-y-2 text-xs">
+              <div className="lg:col-span-7 space-y-2 text-xs">
                 
                 {/* 1. SỐ TÀI KHOẢN / SĐT NHẬN (0977058363) */}
                 <div className="bg-white p-2.5 rounded-xl border-2 border-emerald-300 flex items-center justify-between gap-2 shadow-2xs">
@@ -389,7 +393,7 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
                     <strong className="text-slate-900 block truncate text-xs">
                       {bankName}
                     </strong>
-                    <span className="text-[10px] text-slate-500 block truncate">
+                    <span className="text-[10px] text-slate-500 block leading-snug">
                       {bankFullName}
                     </span>
                   </div>
@@ -460,7 +464,7 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
           </div>
 
           {/* Lời cảm ơn tri ân */}
-          <div className="text-center pt-1 text-slate-600 text-xs">
+          <div className="text-center pt-1 text-slate-600 text-xs md:col-span-2">
             <p className="flex items-center justify-center gap-1.5 font-bold text-amber-900">
               <Heart className="w-4 h-4 text-rose-500 fill-rose-500 animate-pulse shrink-0" />
               <span>Chân thành cảm ơn sự đồng hành và ủng hộ quý báu của Quý Thầy Cô và các bạn nhỏ!</span>

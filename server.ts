@@ -1,5 +1,7 @@
 import express from 'express';
 import { GoogleGenAI } from '@google/genai';
+// Câu lệnh gửi AI dùng chung với bản trình duyệt (src/lib/geminiOcr.ts) để hai đường cho kết quả giống nhau
+import { TEXTBOOK_OCR_PROMPT } from './src/lib/geminiOcr';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
@@ -230,22 +232,7 @@ app.post('/api/extract-textbook', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Định dạng ảnh không hợp lệ' });
     }
 
-    const prompt = `Bạn là trợ lý giáo viên tiểu học Tiếng Việt chuyên nghiệp. 
-Hãy quan sát hình ảnh trang sách giáo khoa (SGK) Tiếng Việt này và trích xuất CHÍNH XÁC toàn bộ nội dung bài tập đọc / bài thơ / đoạn văn để học sinh tiểu học luyện gõ bàn phím 10 ngón.
-
-Yêu cầu quy chuẩn trích xuất:
-1. "title": Tiêu đề chính xác của bài đọc hoặc bài thơ trong trang sách (ví dụ: "Mèo Con Đi Học", "Quê Hương", "Rùa và Thỏ", v.v.).
-2. "content": Toàn bộ nội dung văn bản tiếng Việt có dấu đầy đủ, chuẩn xác chính tả từng từ, từng dấu thanh. Nếu là thơ thì giữ nguyên định dạng xuống dòng của từng câu thơ. Nếu là đoạn văn xuôi thì giữ nguyên cấu trúc đoạn văn bản. Không cắt bớt chữ.
-3. "gradeLevel": Khối lớp tiểu học nhận diện được (3, 4, hoặc 5; nếu không ghi rõ hãy ước lượng độ khó để chọn 3, 4 hoặc 5).
-4. "teacherNote": Một câu dặn dò hoặc gợi ý ngắn gọn, ấm áp của cô giáo dành cho học sinh khi luyện gõ bài này.
-
-Chỉ trả về JSON theo cấu trúc sau, không kèm bất kỳ giải thích hay markdown code block thừa:
-{
-  "title": "Tên bài đọc",
-  "content": "Nội dung bài đọc tiếng Việt...",
-  "gradeLevel": 3,
-  "teacherNote": "Lời dặn của cô giáo..."
-}`;
+    const prompt = TEXTBOOK_OCR_PROMPT;
 
     const response = await client.models.generateContent({
       // Cho phép đổi mô hình qua biến GEMINI_MODEL khi Google đổi tên/ngừng mô hình cũ

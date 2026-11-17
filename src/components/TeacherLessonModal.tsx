@@ -38,6 +38,7 @@ import { Lesson, GradeAssignment } from '../types/typing';
 import { compressImageFile } from '../utils/imageUtils';
 import { uploadImageToSupabaseStorage, bulkUpsertLessonsToSupabase } from '../lib/supabase';
 import { LESSONS } from '../data/lessons';
+import { analyzeTextbookImageInBrowser, OcrError } from '../lib/geminiOcr';
 
 // Callback có thể trả false (hoặc Promise<false>) để báo lưu thất bại; void vẫn hợp lệ cho App cũ
 type MaybeResult = void | boolean | Promise<void | boolean>;
@@ -128,6 +129,18 @@ interface TeacherLessonModalProps {
     importedAssignments?: Record<number, GradeAssignment>
   ) => void;
   initialEditingLesson?: Lesson | null;
+  /** Cài đặt lớp học (trước đây ở menu thả xuống của nút Giáo viên) */
+  classroomSettings?: {
+    isTextbookVisible: boolean;
+    onToggleTextbook: () => void;
+    handsVisible: boolean;
+    onToggleHands: () => void;
+    soundType: 'mechanical' | 'bubble' | string;
+    onSetSoundType: (t: 'mechanical' | 'bubble') => void;
+    onOpenCustomText: () => void;
+    onOpenAutoFit: () => void;
+    onOpenUnikeyNotice: () => void;
+  };
 }
 
 export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
@@ -143,6 +156,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   onAssignLessonToGrade,
   onImportLessons,
   initialEditingLesson,
+  classroomSettings,
 }) => {
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
@@ -165,11 +179,13 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   // - 'editor': Soạn bài & phân tích ảnh SGK bằng AI
   // - 'assign': Giao 1 hoặc nhiều bài cho khối lớp
   // - 'backup': Sao lưu USB & đồng bộ Supabase
-  const [activeTab, setActiveTab] = useState<'manage' | 'editor' | 'assign' | 'backup'>('manage');
+  const [activeTab, setActiveTab] = useState<'manage' | 'editor' | 'assign' | 'backup' | 'settings'>('manage');
   // Dòng bài học đang mở phần xem trước
   const [previewLessonId, setPreviewLessonId] = useState<string | null>(null);
   // Máy chủ đã có sẵn khoá Gemini trong .env chưa (null = đang hỏi)
   const [aiReady, setAiReady] = useState<boolean | null>(null);
+  // Có máy chủ đi kèm (/api) hay không. Bản web Vercel và bản cài đặt .exe KHÔNG có -> gọi thẳng Gemini từ trình duyệt
+  const [aiServer, setAiServer] = useState<boolean | null>(null);
   // Khoá Gemini giáo viên tự nhập (khi máy chủ chưa có). Chỉ lưu trên máy này nếu cô chọn "Nhớ khoá"
   const [geminiKey, setGeminiKey] = useState<string>(() => {
     try {
@@ -368,9 +384,21 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     if (!isOpen || activeTab !== 'editor' || aiReady !== null) return;
     let alive = true;
     fetch('/api/ai-status')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => alive && setAiReady(d ? !!d.ocrReady : null))
-      .catch(() => alive && setAiReady(null));
+      .then(async (r) => {
+        // Trang web tĩnh (Vercel) trả về index.html cho mọi đường dẫn -> không phải JSON = không có máy chủ
+        const isJson = (r.headers.get('content-type') || '').includes('application/json');
+        return r.ok && isJson ? r.json() : null;
+      })
+      .then((d) => {
+        if (!alive) return;
+        setAiServer(!!d);
+        setAiReady(d ? !!d.ocrReady : false);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setAiServer(false);
+        setAiReady(false);
+      });
     return () => {
       alive = false;
     };
@@ -569,33 +597,30 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     setOcrErrorMsg('');
 
     try {
-      const response = await fetch('/api/extract-textbook', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          // Khoá cô tự nhập chỉ dùng khi máy chủ chưa có khoá riêng; máy chủ không lưu, không ghi log
-          ...(userKey ? { 'X-Gemini-Key': userKey } : {}),
-        },
-        body: JSON.stringify({
-          // Gửi nguyên data URL/đường dẫn; máy chủ tự xác định mime từ tiền tố
-          imageBase64: imageUrl,
-        }),
-      });
-
-      const resData = await response.json().catch(() => ({} as any));
-
-      if (!response.ok || !resData.success) {
-        // Khoá cô nhập bị sai/thu hồi: xoá khoá đã nhớ và mở lại ô nhập khoá
-        if (resData.code === 'KEY_INVALID' && userKey) {
-          forgetGeminiKey();
-          setKeyDraft('');
-          setKeyDialogError('Khoá vừa dùng không đúng hoặc đã bị thu hồi. Cô tạo khoá mới rồi dán lại nhé.');
-          setShowKeyDialog(true);
+      let extracted: Record<string, any> = {};
+      if (aiServer) {
+        // CÓ MÁY CHỦ (chạy localhost): gửi qua máy chủ như trước
+        const response = await fetch('/api/extract-textbook', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            // Khoá cô tự nhập chỉ dùng khi máy chủ chưa có khoá riêng; máy chủ không lưu, không ghi log
+            ...(userKey ? { 'X-Gemini-Key': userKey } : {}),
+          },
+          body: JSON.stringify({
+            // Gửi nguyên data URL/đường dẫn; máy chủ tự xác định mime từ tiền tố
+            imageBase64: imageUrl,
+          }),
+        });
+        const resData = await response.json().catch(() => ({} as any));
+        if (!response.ok || !resData.success) {
+          throw new OcrError(resData.code === 'KEY_INVALID' ? 'KEY_INVALID' : 'OTHER', resData.error || 'Không thể trích xuất văn bản từ hình ảnh');
         }
-        throw new Error(resData.error || 'Không thể trích xuất văn bản từ hình ảnh');
+        extracted = resData.data || {};
+      } else {
+        // KHÔNG CÓ MÁY CHỦ (bản web Vercel, bản cài đặt .exe): gọi thẳng Google bằng khoá cô đã nhập
+        extracted = { ...(await analyzeTextbookImageInBrowser(imageUrl, userKey)) };
       }
-
-      const extracted = resData.data || {};
 
       if (typeof extracted.title === 'string' && extracted.title) {
         setTitle(extracted.title);
@@ -620,7 +645,14 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
 
       setOcrSuccessMsg('✅ AI đã phân tích và trích xuất thành công nội dung bài đọc từ ảnh SGK! Cô giáo hãy xem lại và chỉnh sửa bên dưới nếu cần trước khi lưu.');
     } catch (err: any) {
-      console.error('Error analyzing textbook image:', err);
+      console.error('Error analyzing textbook image:', err?.code || '', err?.message || err);
+      // Khoá cô nhập bị sai/thu hồi: xoá khoá đã nhớ và mở lại ô nhập khoá
+      if (err instanceof OcrError && err.code === 'KEY_INVALID' && userKey) {
+        forgetGeminiKey();
+        setKeyDraft('');
+        setKeyDialogError('Khoá vừa dùng không đúng hoặc đã bị thu hồi. Cô tạo khoá mới rồi dán lại nhé.');
+        setShowKeyDialog(true);
+      }
       setOcrErrorMsg(`❌ Lỗi khi phân tích ảnh: ${err?.message || 'Vui lòng thử lại với ảnh rõ nét hơn'}`);
     } finally {
       setIsAnalyzingImage(false);
@@ -1416,6 +1448,9 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                 { id: 'editor' as const, icon: <Edit3 className="w-5 h-5" />, label: editingLessonId ? 'Sửa bài' : 'Soạn bài', extra: '' },
                 { id: 'assign' as const, icon: <Send className="w-5 h-5" />, label: 'Giao bài', extra: allAssignedLessonIds.size > 0 ? String(allAssignedLessonIds.size) : '' },
                 { id: 'backup' as const, icon: <HardDrive className="w-5 h-5" />, label: 'Sao lưu & đồng bộ', extra: '' },
+                ...(classroomSettings
+                  ? [{ id: 'settings' as const, icon: <SlidersHorizontal className="w-5 h-5" />, label: 'Cài đặt lớp học', extra: '' }]
+                  : []),
               ].map((item) => {
                 const active = activeTab === item.id;
                 return (
@@ -2398,6 +2433,95 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                     </span>
                   </button>
                 </form>
+              )}
+
+              {activeTab === 'settings' && classroomSettings && (
+                <div className="space-y-3 max-w-4xl" data-testid="classroom-settings">
+                  <h3 className="text-lg font-black text-slate-900">Cài đặt lớp học</h3>
+                  <p className="text-sm text-slate-600 font-semibold">Áp dụng ngay cho máy đang dùng.</p>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {/* Bật/tắt nhanh */}
+                    {[
+                      {
+                        key: 'hands',
+                        title: '✋ Bàn tay hướng dẫn gõ',
+                        desc: 'Hiện bàn tay ảo chỉ ngón cần gõ (dùng được cho mọi kiểu bàn phím).',
+                        on: classroomSettings.handsVisible,
+                        onClick: classroomSettings.onToggleHands,
+                      },
+                      {
+                        key: 'textbook',
+                        title: '📖 Cột Sách giáo khoa',
+                        desc: 'Hiện ảnh trang sách giáo khoa bên phải màn hình luyện gõ.',
+                        on: classroomSettings.isTextbookVisible,
+                        onClick: classroomSettings.onToggleTextbook,
+                      },
+                    ].map((c) => (
+                      <div key={c.key} className="p-4 rounded-2xl border border-slate-200 bg-white flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <h4 className="font-black text-base text-slate-900">{c.title}</h4>
+                          <p className="text-sm text-slate-600">{c.desc}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={c.onClick}
+                          data-setting-toggle={c.key}
+                          aria-pressed={c.on}
+                          className={`shrink-0 min-h-[44px] min-w-[84px] px-4 rounded-full text-sm font-black border-2 cursor-pointer ${
+                            c.on ? 'bg-emerald-600 text-white border-emerald-700' : 'bg-white text-slate-700 border-slate-300'
+                          }`}
+                        >
+                          {c.on ? 'Đang bật' : 'Đang tắt'}
+                        </button>
+                      </div>
+                    ))}
+
+                    {/* Tiếng gõ phím */}
+                    <div className="p-4 rounded-2xl border border-slate-200 bg-white flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <h4 className="font-black text-base text-slate-900">🔊 Tiếng gõ phím</h4>
+                        <p className="text-sm text-slate-600">Âm thanh phát ra mỗi lần học sinh gõ phím.</p>
+                      </div>
+                      <div className="shrink-0 grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-full" role="group" aria-label="Tiếng gõ phím">
+                        {(['mechanical', 'bubble'] as const).map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            aria-pressed={classroomSettings.soundType === t}
+                            onClick={() => classroomSettings.onSetSoundType(t)}
+                            className={`min-h-[40px] px-3 rounded-full text-sm font-black cursor-pointer ${
+                              classroomSettings.soundType === t ? 'bg-sky-500 text-white' : 'text-slate-600'
+                            }`}
+                          >
+                            {t === 'mechanical' ? 'Phím cơ' : 'Bong bóng'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Các công cụ mở hộp riêng */}
+                    {[
+                      { key: 'custom', title: '✍️ Tự soạn bài riêng', desc: 'Dán đoạn văn bất kỳ để học sinh luyện gõ ngay, không cần lưu vào danh sách bài.', btn: 'Mở', onClick: classroomSettings.onOpenCustomText },
+                      { key: 'fit', title: '🤖 Căn vừa màn hình', desc: 'Tự đo màn hình và chỉnh cỡ bàn phím, chữ cho vừa máy đang dùng.', btn: 'Căn ngay', onClick: classroomSettings.onOpenAutoFit },
+                      { key: 'unikey', title: '📢 Nhắc học sinh tắt Unikey', desc: 'Hiện lại thông báo “tắt Unikey hoặc chuyển V sang E” cho cả lớp.', btn: 'Hiện nhắc', onClick: classroomSettings.onOpenUnikeyNotice },
+                    ].map((c) => (
+                      <div key={c.key} className="p-4 rounded-2xl border border-slate-200 bg-white flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <h4 className="font-black text-base text-slate-900">{c.title}</h4>
+                          <p className="text-sm text-slate-600">{c.desc}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={c.onClick}
+                          data-setting-action={c.key}
+                          className="shrink-0 min-h-[44px] px-4 rounded-full bg-sky-600 hover:bg-sky-500 text-white text-sm font-black cursor-pointer"
+                        >
+                          {c.btn}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
 
               {activeTab === 'backup' && (

@@ -8,6 +8,11 @@ interface KeyboardThemeModalProps {
   onClose: () => void;
   currentThemeId: string;
   onSelectTheme: (theme: KeyboardSkinTheme) => void;
+  /** Bàn tay hướng dẫn đang hiện (mọi kiểu bàn phím) */
+  handsVisible?: boolean;
+  onToggleHands?: () => void;
+  /** Đang dùng kiểu bàn phím hướng dẫn (phím to) */
+  isGuideLayout?: boolean;
 }
 
 export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
@@ -15,6 +20,9 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
   onClose,
   currentThemeId,
   onSelectTheme,
+  handsVisible,
+  onToggleHands,
+  isGuideLayout,
 }) => {
   const [filterTab, setFilterTab] = useState<'all' | 'hands' | 'real' | 'system'>('all');
 
@@ -65,6 +73,36 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* BẬT/TẮT BÀN TAY HƯỚNG DẪN: dùng được cho mọi kiểu bàn phím */}
+        {onToggleHands && (
+          <div
+            data-testid="theme-hands-row"
+            className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-sky-200 bg-white"
+          >
+            <div className="min-w-0">
+              <p className="text-base font-black text-slate-900">✋ Bàn tay hướng dẫn gõ</p>
+              <p className="text-sm font-semibold text-slate-600">
+                {isGuideLayout
+                  ? 'Đang dùng bàn phím có hướng dẫn tay gõ (bàn tay bật sẵn).'
+                  : 'Dùng được cho mọi kiểu bàn phím. Với bàn phím 108 phím, bàn tay chỉ hiện ở khu vực chính.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onToggleHands}
+              data-testid="theme-hands-toggle"
+              aria-pressed={!!handsVisible}
+              className={`min-h-[44px] px-5 rounded-full text-base font-black cursor-pointer transition-colors border-2 ${
+                handsVisible
+                  ? 'bg-sky-500 text-white border-sky-600 hover:bg-sky-400'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              {handsVisible ? '✋ Bàn tay: Bật' : 'Bàn tay: Tắt'}
+            </button>
+          </div>
+        )}
 
         {/* FEATURED SPOTLIGHT HERO CARD: BÀN PHÍM CÓ HƯỚNG DẪN TAY GÕ */}
         {handsGuideTheme && (

@@ -95,6 +95,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   soundVolume: 0.7,
   voicePrompt: false,
   handsOverlayEnabled: true, // Bàn phím có bàn tay hướng dẫn là mặc định
+  handsVisible: true,
+  handsOnRealKeyboards: false,
   handsOpacity: 0.75,
   handsStyle: 'realistic',
   showFingerGuideText: true,
@@ -614,11 +616,12 @@ export default function App() {
 
   const handleSelectTheme = (theme: KeyboardSkinTheme) => {
     // Chọn "Bàn phím có hướng dẫn tay gõ" -> bật bàn tay; chọn mẫu bàn phím khác -> tắt bàn tay để hiện đúng mẫu đó
+    // Bàn tay giờ bật/tắt riêng được trên mọi kiểu: kiểu 108 phím dùng lại lựa chọn đã nhớ (mặc định tắt)
     if (theme.isHandsGuideTheme) {
-      setSettings((s) => ({ ...s, handsOverlayEnabled: true }));
+      setSettings((s) => ({ ...s, handsOverlayEnabled: true, handsVisible: true }));
       return;
     }
-    setSettings((s) => ({ ...s, handsOverlayEnabled: false }));
+    setSettings((s) => ({ ...s, handsOverlayEnabled: false, handsVisible: !!s.handsOnRealKeyboards }));
     setCurrentKeyboardTheme(theme);
     try {
       localStorage.setItem('typing_kids_keyboard_theme', theme.id);
@@ -634,12 +637,22 @@ export default function App() {
       const parsed = saved ? JSON.parse(saved) : null;
       // Ghép với mặc định để cài đặt cũ thiếu trường mới vẫn chạy đúng
       // Mỗi lần mở phần mềm luôn bắt đầu bằng bàn phím có bàn tay hướng dẫn (học sinh có thể đổi trong "Đổi Phím")
-      if (parsed && typeof parsed === 'object') return { ...DEFAULT_APP_SETTINGS, ...parsed, handsOverlayEnabled: true };
+      if (parsed && typeof parsed === 'object') return { ...DEFAULT_APP_SETTINGS, ...parsed, handsOverlayEnabled: true, handsVisible: true };
     } catch {
       // Fallback
     }
     return DEFAULT_APP_SETTINGS;
   });
+
+  // Bàn tay hướng dẫn: hiện trên mọi kiểu bàn phím. Cài đặt cũ chưa có trường này -> theo kiểu đang dùng
+  const handsVisible = settings.handsVisible ?? settings.handsOverlayEnabled;
+  const toggleHandsVisible = useCallback(() => {
+    setSettings((s) => {
+      const next = !(s.handsVisible ?? s.handsOverlayEnabled);
+      // Đang dùng kiểu 108 phím thì nhớ lựa chọn này cho lần chọn kiểu 108 phím sau
+      return s.handsOverlayEnabled ? { ...s, handsVisible: next } : { ...s, handsVisible: next, handsOnRealKeyboards: next };
+    });
+  }, []);
 
   // Audio settings sync
   useEffect(() => {
@@ -2082,8 +2095,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* CLUSTER 2: CHẾ ĐỘ TELEX/VNI, HƯỚNG DẪN GÕ & UNIKEY */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        {/* CLUSTER 2: CHẾ ĐỘ TELEX/VNI, HƯỚNG DẪN GÕ & BÀI CÔ GIÁO GIAO (màn hẹp khít khoảng cách để không xuống thêm dòng) */}
+        <div className="flex items-center gap-1 lg:gap-2 shrink-0">
           {/* Vietnamese Mode Selector (Telex / VNI) */}
           <div className="flex items-center gap-0.5 bg-amber-50 p-0.5 rounded-lg border border-amber-300 shadow-2xs">
             <button
@@ -2117,12 +2130,34 @@ export default function App() {
             type="button"
             // Mở tab "Làm quen bàn phím" trước: biết tên hàng phím, khu vực rồi mới học đặt tay
             onClick={() => handleOpenTypingGuide('keyboard_map')}
-            className="min-h-[36px] px-3 rounded-lg bg-gradient-to-r from-amber-400 via-amber-300 to-orange-400 hover:from-amber-300 hover:to-orange-300 text-slate-950 text-sm font-black flex items-center gap-1.5 transition-all cursor-pointer border-2 border-amber-400 shadow-2xs hover:shadow-xs hover:scale-103 active:scale-95 whitespace-nowrap"
+            className="min-h-[36px] px-2 lg:px-3 rounded-lg bg-gradient-to-r from-amber-400 via-amber-300 to-orange-400 hover:from-amber-300 hover:to-orange-300 text-slate-950 text-sm font-black flex items-center gap-1.5 transition-all cursor-pointer border-2 border-amber-400 shadow-2xs hover:shadow-xs hover:scale-103 active:scale-95 whitespace-nowrap"
             title="Sổ tay Hướng dẫn gõ 10 ngón: Đặt tay đúng, Gõ dấu Tiếng Việt & Bàn phím số Numpad"
           >
-            <span className="text-xs">📖</span>
+            <span className="text-xs hidden lg:inline" aria-hidden="true">📖</span>
             <span className="font-extrabold tracking-wide">HƯỚNG DẪN GÕ</span>
             <span className="w-1.5 h-1.5 rounded-full bg-red-600 animate-ping shrink-0" />
+          </button>
+
+          {/* Nút BÀI CÔ GIÁO GIAO (trước là "Chi tiết" ở dải xanh): mở ngăn xem các bài cô giao cho lớp */}
+          <button
+            type="button"
+            data-testid="header-homework-button"
+            onClick={() => {
+              setTextbookTab('homework');
+              setIsRightPanelOpen(true);
+            }}
+            className="min-h-[36px] px-2 lg:px-3 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white text-sm font-black flex items-center gap-1.5 transition-all cursor-pointer border-2 border-emerald-500 shadow-2xs hover:scale-103 active:scale-95 whitespace-nowrap"
+            title="Xem các bài cô giáo giao cho lớp"
+          >
+            <span className="text-xs hidden lg:inline" aria-hidden="true">📋</span>
+            {/* Màn hẹp (máy tính bảng dọc) dùng chữ ngắn để thanh trên cùng không xuống thêm một dòng */}
+            <span className="font-extrabold tracking-wide hidden min-[1360px]:inline">BÀI CÔ GIÁO GIAO</span>
+            <span className="font-extrabold tracking-wide min-[1360px]:hidden">BÀI GIAO</span>
+            {assignedLessonsList.length > 0 && (
+              <span className="min-w-[20px] h-5 px-1 rounded-full bg-white text-emerald-700 text-xs font-black flex items-center justify-center">
+                {assignedLessonsList.length}
+              </span>
+            )}
           </button>
 
         </div>
@@ -2186,96 +2221,19 @@ export default function App() {
             </button>
           )}
 
-          {/* NÚT GIÁO VIÊN: gom công cụ quản trị + cài đặt, bấm mới sổ ra */}
-          <div className="relative">
-            <button
-              type="button"
-              onClick={(e) => {
-                const r = e.currentTarget.getBoundingClientRect();
-                setSettingsDropdownTop(Math.round(r.bottom + 6));
-                setShowSettingsDropdown((prev) => !prev);
-              }}
-              className={`min-h-[36px] px-3 rounded-lg text-sm font-black flex items-center gap-1.5 cursor-pointer shadow-2xs border transition-colors ${
-                showSettingsDropdown ? 'bg-emerald-700 text-white border-emerald-800' : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500'
-              }`}
-              title="Công cụ và cài đặt dành cho giáo viên"
-              aria-expanded={showSettingsDropdown}
-            >
-              <UserCheck className="w-4 h-4" />
-              <span>Giáo viên</span>
-              <span aria-hidden="true">{showSettingsDropdown ? '▴' : '▾'}</span>
-              {isSupabaseOnline && <span className="w-1.5 h-1.5 rounded-full bg-emerald-200" title="Đã kết nối dữ liệu trực tuyến" />}
-            </button>
-
-            {showSettingsDropdown && (
-              <div
-                style={{ top: settingsDropdownTop }}
-                className="fixed right-2 w-72 max-h-[80vh] overflow-y-auto bg-white border-2 border-emerald-300 rounded-2xl p-3 shadow-2xl z-50 text-slate-800 animate-in fade-in zoom-in-95 duration-150"
-              >
-                <h4 className="text-sm font-black text-emerald-900 mb-2">👩‍🏫 Dành cho giáo viên</h4>
-                <div className="flex flex-col gap-1.5">
-                  {[
-                    { label: '📝 Góc Giáo Viên: soạn & giao bài', onClick: () => setIsTeacherModalOpen(true) },
-                    { label: '✍️ Tự soạn bài riêng', onClick: () => setIsCustomTextModalOpen(true) },
-                    {
-                      label: '🖼️ Đổi ảnh SGK của bài này',
-                      onClick: () => {
-                        setEditingLessonForModal(activeLesson);
-                        setIsTeacherModalOpen(true);
-                      },
-                    },
-                    {
-                      label: isRightColumnVisible ? '📖 Ẩn cột Sách giáo khoa' : '📖 Hiện cột Sách giáo khoa',
-                      onClick: () => setIsRightColumnVisible((prev) => !prev),
-                    },
-                    { label: '🤖 Căn vừa màn hình (tự động)', onClick: openAiModal },
-                    { label: '📢 Nhắc học sinh tắt Unikey', onClick: () => setIsUnikeyNoticeOpen(true) },
-                  ].map((item) => (
-                    <button
-                      key={item.label}
-                      type="button"
-                      onClick={() => {
-                        setShowSettingsDropdown(false);
-                        item.onClick();
-                      }}
-                      className="w-full min-h-[38px] text-left px-3 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 text-sm font-bold text-slate-800 cursor-pointer transition-colors"
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-
-                <h4 className="text-sm font-black text-sky-900 mt-3 mb-1.5">⚙️ Cài đặt bàn phím</h4>
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-sm text-slate-700 font-bold">Bàn tay hướng dẫn:</span>
-                  <button
-                    type="button"
-                    onClick={() => setSettings((s) => ({ ...s, handsOverlayEnabled: !s.handsOverlayEnabled }))}
-                    className={`min-h-[32px] px-3 rounded-lg text-sm font-black cursor-pointer transition-colors ${
-                      settings.handsOverlayEnabled ? 'bg-sky-500 text-white' : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
-                    {settings.handsOverlayEnabled ? 'Bật' : 'Tắt'}
-                  </button>
-                </div>
-                <span className="block text-sm text-slate-700 font-bold mb-1">Tiếng gõ phím:</span>
-                <div className="grid grid-cols-2 gap-1 p-0.5 bg-slate-100 rounded-lg">
-                  {(['mechanical', 'bubble'] as const).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setSettings((s) => ({ ...s, soundType: t }))}
-                      className={`min-h-[32px] rounded text-sm font-bold transition-colors cursor-pointer ${
-                        settings.soundType === t ? 'bg-sky-500 text-white shadow-xs' : 'text-slate-600'
-                      }`}
-                    >
-                      {t === 'mechanical' ? 'Phím cơ' : 'Bong bóng'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          {/* NÚT GIÁO VIÊN: mở thẳng Cổng Giáo Viên (chưa đăng nhập thì hiện màn đăng nhập).
+              Các cài đặt lớp học trước đây ở menu thả xuống nay nằm trong mục "Cài đặt lớp học" của Cổng. */}
+          <button
+            type="button"
+            data-testid="header-teacher-button"
+            onClick={() => setIsTeacherModalOpen(true)}
+            className="min-h-[36px] px-3 rounded-lg text-sm font-black flex items-center gap-1.5 cursor-pointer shadow-2xs border transition-colors bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500"
+            title="Mở Cổng Giáo Viên (đăng nhập để soạn bài, giao bài, cài đặt lớp học)"
+          >
+            <UserCheck className="w-4 h-4" />
+            <span>Giáo viên</span>
+            {isSupabaseOnline && <span className="w-1.5 h-1.5 rounded-full bg-emerald-200" title="Đã kết nối dữ liệu trực tuyến" />}
+          </button>
         </div>
       </header>
 
@@ -2318,16 +2276,6 @@ export default function App() {
                 </button>
               );
             })}
-            <button
-              type="button"
-              onClick={() => {
-                setTextbookTab('homework');
-                setIsRightPanelOpen(true);
-              }}
-              className="min-h-[28px] px-2.5 rounded-lg bg-emerald-900/80 hover:bg-emerald-900 text-white text-sm font-black cursor-pointer ml-1"
-            >
-              Chi tiết ➜
-            </button>
           </div>
         </div>
       )}
@@ -2354,6 +2302,7 @@ export default function App() {
                 lessonTitle={activeLesson.title}
                 onStart={startTyping}
                 onChooseLesson={() => setIsCurriculumModalOpen(true)}
+                onOpenAuthor={() => setIsAuthorDonateModalOpen(true)}
               />
             )}
             {/* 1. Khu vực luyện gõ & ô nhập văn bản (PracticeArea) */}
@@ -2437,6 +2386,7 @@ export default function App() {
                 symbolGuideInfo={currentSymbolGuide}
                 onKeyClick={handleKeyClick}
                 handsOverlayEnabled={settings.handsOverlayEnabled}
+                handsVisible={handsVisible}
                 handsOpacity={settings.handsOpacity}
                 handsStyle={settings.handsStyle}
                 theme={currentKeyboardTheme}
@@ -2632,6 +2582,27 @@ export default function App() {
             onAssignLessonToGrade={handleAssignLessonToGrade}
             onImportLessons={handleImportLessonsFromUSB}
             initialEditingLesson={editingLessonForModal}
+            classroomSettings={{
+              isTextbookVisible: isRightColumnVisible,
+              onToggleTextbook: () => setIsRightColumnVisible((prev) => !prev),
+              handsVisible,
+              onToggleHands: toggleHandsVisible,
+              soundType: settings.soundType,
+              onSetSoundType: (t) => setSettings((st) => ({ ...st, soundType: t })),
+              // Các hộp dưới đây nằm ngoài Cổng: đóng Cổng trước để hộp hiện lên trên cùng
+              onOpenCustomText: () => {
+                setIsTeacherModalOpen(false);
+                setIsCustomTextModalOpen(true);
+              },
+              onOpenAutoFit: () => {
+                setIsTeacherModalOpen(false);
+                openAiModal();
+              },
+              onOpenUnikeyNotice: () => {
+                setIsTeacherModalOpen(false);
+                setIsUnikeyNoticeOpen(true);
+              },
+            }}
           />
         </ErrorBoundary>
       )}
@@ -2640,6 +2611,7 @@ export default function App() {
       <UnikeyNoticeModal
         isOpen={isUnikeyNoticeOpen}
         onClose={handleCloseUnikeyNotice}
+        onOpenAuthor={() => setIsAuthorDonateModalOpen(true)}
       />
 
       {/* MENU CHỌN KHỐI LỚP DẠNG NỔI 3D (LỚP 3, LỚP 4, LỚP 5) */}
@@ -2650,6 +2622,7 @@ export default function App() {
         currentGrade={selectedGrade}
         gradeAssignments={gradeAssignments}
         onOpenTypingGuide={() => handleOpenTypingGuide('keyboard_map')}
+        onOpenAuthor={() => setIsAuthorDonateModalOpen(true)}
       />
 
       {/* THÔNG TIN TÁC GIẢ & DONATE CÀ PHÊ: Nguyễn Thanh Liêm - Tiểu học số 1 Tân Uyên */}
@@ -2755,6 +2728,9 @@ export default function App() {
             : currentKeyboardTheme.id
         }
         onSelectTheme={handleSelectTheme}
+        handsVisible={handsVisible}
+        onToggleHands={toggleHandsVisible}
+        isGuideLayout={settings.handsOverlayEnabled}
       />
 
       {/* AI Smart Auto-Fit Viewport Details Modal */}

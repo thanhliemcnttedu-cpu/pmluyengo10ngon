@@ -222,7 +222,9 @@ export interface AppSettings {
   soundType: 'mechanical' | 'bubble' | 'quiet';
   soundVolume: number;
   voicePrompt: boolean;
-  handsOverlayEnabled: boolean;
+  handsOverlayEnabled: boolean; // = đang dùng KIỂU bàn phím hướng dẫn (chỉ khu vực chính, phím to)
+  handsVisible?: boolean; // Hiện bàn tay hướng dẫn (bật/tắt được trên MỌI kiểu bàn phím)
+  handsOnRealKeyboards?: boolean; // Lựa chọn nhớ riêng cho các kiểu bàn phím 108 phím (mặc định tắt)
   handsOpacity: number; // 0.2 to 1.0
   handsStyle: HandDisplayStyle;
   showFingerGuideText: boolean;
