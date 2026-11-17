@@ -847,20 +847,23 @@ export default function App() {
     return cloudOk || serverOk;
   };
 
-  const handleDeleteTeacherLesson = async (id: string) => {
+  // Trả về false khi máy chủ TỪ CHỐI QUYỀN xoá (giáo viên phụ xoá bài không phải của mình):
+  // khi đó giữ nguyên bài trên máy. Mất mạng thì vẫn xoá trên máy như trước.
+  const handleDeleteTeacherLesson = async (id: string): Promise<boolean> => {
+    // 1. Xóa trên Supabase trước để biết có quyền hay không
+    try {
+      const cloud = await deleteLessonFromSupabase(id);
+      if (cloud === 'denied') return false;
+    } catch (err) {
+      console.warn('Lỗi khi xóa bài học trên Supabase:', err);
+    }
+
     const updatedList = allLessons.filter((l) => l.id !== id);
     setAllLessons(updatedList);
     try {
       localStorage.setItem('typing_kids_all_lessons', JSON.stringify(updatedList));
     } catch {
       // Ignore
-    }
-
-    // 1. Xóa trực tiếp khỏi Supabase Cloud Database
-    try {
-      await deleteLessonFromSupabase(id);
-    } catch (err) {
-      console.warn('Lỗi khi xóa bài học trên Supabase:', err);
     }
 
     // 2. Server fallback
@@ -877,6 +880,7 @@ export default function App() {
       setCustomLesson(null);
       handleRestart();
     }
+    return true;
   };
 
   // Nạp danh sách bài học và bài tập từ file USB (Offline)

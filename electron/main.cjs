@@ -80,51 +80,131 @@ function findWindowIcon() {
   return undefined;
 }
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
+// ---------------------------------------------------------------------------
+// TỰ CẬP NHẬT GIAO DIỆN: có mạng thì mở bản web mới nhất (cập nhật ngay khi tác giả đưa bản mới lên),
+// mất mạng thì mở bản đóng gói sẵn trong máy. Có thể ép chạy bản trong máy: chạy kèm --offline
+// hoặc đặt biến môi trường LUYENGO_OFFLINE=1; đổi địa chỉ web bằng LUYENGO_APP_URL.
+// ---------------------------------------------------------------------------
+const APP_URL = (process.env.LUYENGO_APP_URL || 'https://luyengo10ngon.vercel.app/').replace(/\/?$/, '/');
+const APP_ORIGIN = new URL(APP_URL).origin;
+const FORCE_OFFLINE = process.argv.includes('--offline') || process.env.LUYENGO_OFFLINE === '1';
+const ONLINE_CHECK_MS = 6000;
+
+async function isWebReachable() {
+  if (FORCE_OFFLINE) return false;
+  try {
+    const { net } = require('electron');
+    if (typeof net.isOnline === 'function' && !net.isOnline()) return false;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ONLINE_CHECK_MS);
+    const res = await net.fetch(APP_URL, { method: 'GET', signal: ctrl.signal, cache: 'no-store' });
+    clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function buildWindow(mode) {
+  const win = new BrowserWindow({
     width: 1366,
     height: 768,
     minWidth: 1024,
     minHeight: 680,
-    title: 'Luyện Gõ Bàn Phím 10 Ngón - Tiểu Học',
+    show: false,
+    title: 'Bé Luyện Gõ 10 Ngón - Tiểu Học',
     ...(findWindowIcon() ? { icon: findWindowIcon() } : {}),
-    backgroundColor: '#f0f9ff',
+    backgroundColor: '#eef5ff',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),
-      // RỦI RO: tắt webSecurity bỏ chặn same-origin/CORS cho mọi nội dung trong cửa sổ.
-      // Giữ nguyên theo hiện trạng; chủ dự án cân nhắc bật lại (base './' đã đủ để nạp file:// cục bộ).
-      webSecurity: false,
+      // Bản web (https): bật đầy đủ bảo mật trình duyệt.
+      // Bản trong máy (file://): giữ như trước để nạp tệp cục bộ, ảnh SGK và gọi Supabase không vướng CORS.
+      webSecurity: mode === 'online',
     },
     autoHideMenuBar: true,
   });
 
+  // Liên kết ra ngoài (Zalo, Google Ống kính, trang khác...) mở bằng trình duyệt của máy, không mở trong phần mềm
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url) || /^mailto:|^tel:/i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    const isApp = url.startsWith('file://') || url.startsWith(APP_ORIGIN) || url.startsWith('http://localhost');
+    if (!isApp) {
+      event.preventDefault();
+      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    }
+  });
+
+  win.once('ready-to-show', () => {
+    win.maximize();
+    win.show();
+  });
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
+  });
+  return win;
+}
+
+function loadOffline(win) {
+  const distIndexPath = path.join(__dirname, '../dist/index.html');
+  if (fs.existsSync(distIndexPath)) {
+    return win.loadFile(distIndexPath);
+  }
+  // Chế độ phát triển: chưa build thì nạp máy chủ Vite
+  return win.loadURL('http://localhost:3000').catch(() => {
+    dialog.showErrorBox(
+      'Chưa có bản dựng phần mềm',
+      'Không tìm thấy thư mục dist/index.html và không kết nối được máy chủ phát triển (http://localhost:3000).\n\n' +
+        'Hãy chạy "npm run build" để tạo bản dựng, hoặc chạy "npm run dev" rồi mở lại phần mềm.'
+    );
+    app.quit();
+  });
+}
+
+async function createWindow() {
   // Tắt thanh menu mặc định của Electron để giao diện chuyên nghiệp như ứng dụng bản quyền
   Menu.setApplicationMenu(null);
 
-  // Đường dẫn tới bản dựng tĩnh dist/index.html
-  const distIndexPath = path.join(__dirname, '../dist/index.html');
-
-  if (fs.existsSync(distIndexPath)) {
-    // Chế độ Production / Offline: Nạp trực tiếp từ file index.html cục bộ
-    mainWindow.loadFile(distIndexPath);
-  } else {
-    // Chế độ Development: Nạp qua local server Vite nếu chưa build.
-    // Không nạp index.html nguồn khi lỗi: file đó cần Vite biên dịch, nạp thẳng chỉ ra màn hình trắng khó hiểu
-    mainWindow.loadURL('http://localhost:3000').catch(() => {
-      dialog.showErrorBox(
-        'Chưa có bản dựng phần mềm',
-        'Không tìm thấy thư mục dist/index.html và không kết nối được máy chủ phát triển (http://localhost:3000).\n\n' +
-          'Hãy chạy "npm run build" để tạo bản dựng, hoặc chạy "npm run dev" rồi mở lại phần mềm.'
-      );
-      app.quit();
+  if (await isWebReachable()) {
+    const win = buildWindow('online');
+    mainWindow = win;
+    let fellBack = false;
+    const fallBack = () => {
+      if (fellBack || win.isDestroyed()) return;
+      fellBack = true;
+      // Mạng chập chờn giữa chừng: chuyển sang bản trong máy (mở cửa sổ mới vì cấu hình bảo mật khác nhau)
+      console.log('[luyen-go] Ban web loi giua chung -> chuyen sang ban trong may');
+      const off = buildWindow('offline');
+      mainWindow = off;
+      loadOffline(off);
+      win.destroy();
+    };
+    win.webContents.on('did-fail-load', (_e, code, _desc, _url, isMainFrame) => {
+      if (isMainFrame && code !== -3) fallBack(); // -3 = ABORTED (đổi trang), không phải lỗi mạng
     });
+    console.log('[luyen-go] Mo ban web moi nhat:', APP_URL);
+    win.loadURL(APP_URL).catch(fallBack);
+  } else {
+    console.log('[luyen-go] Khong co mang -> mo ban trong may');
+    const win = buildWindow('offline');
+    mainWindow = win;
+    loadOffline(win);
   }
+}
 
-  // Khi cửa sổ đóng
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+// Chỉ cho mở MỘT cửa sổ phần mềm: bấm biểu tượng lần nữa thì đưa cửa sổ đang mở lên trước
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
   });
 }
 

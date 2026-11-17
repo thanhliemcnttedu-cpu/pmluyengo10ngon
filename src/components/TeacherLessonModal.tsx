@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { loginTeacher, logoutTeacher, loadTeacherSession, type TeacherSession } from '../lib/adminAuth';
+import { TeacherAccountsPanel } from './TeacherAccountsPanel';
+import { ChangeOwnPasswordPanel } from './ChangeOwnPasswordPanel';
+import { AdminPasswordRecovery } from './AdminPasswordRecovery';
 import {
   X,
   Upload,
@@ -33,6 +37,7 @@ import {
   ShieldCheck,
   Download,
   HardDrive,
+  KeyRound,
 } from 'lucide-react';
 import { Lesson, GradeAssignment } from '../types/typing';
 import { compressImageFile } from '../utils/imageUtils';
@@ -108,13 +113,17 @@ const normalizeImportedAssignments = (raw: unknown): Record<number, GradeAssignm
   return Object.keys(out).length > 0 ? out : undefined;
 };
 
+// Phiên đăng nhập giáo viên. Đổi tên khoá (v2) để các máy đã đăng nhập bằng tài khoản/mật khẩu cũ phải đăng nhập lại.
+export const TEACHER_AUTH_KEY = 'typing_kids_teacher_auth_v2';
+
 interface TeacherLessonModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaveLesson: (updatedLesson: Lesson) => MaybeResult;
   allLessons?: Lesson[];
   teacherLessons?: Lesson[];
-  onDeleteLesson: (id: string) => void;
+  /** Trả false (hoặc Promise<false>) khi máy chủ từ chối quyền xoá */
+  onDeleteLesson: (id: string) => void | boolean | Promise<boolean | void>;
   onResetSystemLesson?: (id: string) => void;
   onSelectLesson: (lesson: Lesson) => void;
   gradeAssignments?: Record<number, GradeAssignment>;
@@ -160,18 +169,22 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   initialEditingLesson,
   classroomSettings,
 }) => {
-  // Authentication state
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('typing_kids_teacher_auth') === 'true';
-    } catch {
-      return false;
-    }
-  });
+  // Phiên đăng nhập (admin hoặc giáo viên phụ, kèm mã GV). Học sinh chưa đăng nhập: null
+  const [teacherSession, setTeacherSession] = useState<TeacherSession | null>(() => loadTeacherSession());
+  const isAuthenticated = !!teacherSession;
+  const isAdminRole = teacherSession?.role === 'admin';
+  // Tên đứng bài mặc định: giáo viên phụ dùng họ tên của mình
+  const defaultAuthorName = teacherSession?.role === 'teacher' ? teacherSession.displayName : DEFAULT_TEACHER_NAME;
+  /** Được sửa/xoá bài này không: admin mọi bài; giáo viên phụ chỉ bài do chính mình tạo */
+  const canModifyLesson = (l: Lesson | null | undefined) =>
+    !!l && (isAdminRole || (!!teacherSession?.userId && l.ownerId === teacherSession.userId));
   const [username, setUsername] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string>('');
+  const [authBusy, setAuthBusy] = useState<boolean>(false);
+  const [authNotice, setAuthNotice] = useState<string>('');
+  const [showRecovery, setShowRecovery] = useState<boolean>(false);
 
   // Thông tin bài vừa được lưu thành công trên máy chủ
   const [lastSavedLesson, setLastSavedLesson] = useState<Lesson | null>(null);
@@ -181,7 +194,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   // - 'editor': Soạn bài & phân tích ảnh SGK bằng AI
   // - 'assign': Giao 1 hoặc nhiều bài cho khối lớp
   // - 'backup': Sao lưu USB & đồng bộ Supabase
-  const [activeTab, setActiveTab] = useState<'manage' | 'editor' | 'assign' | 'backup' | 'settings'>('manage');
+  const [activeTab, setActiveTab] = useState<'manage' | 'editor' | 'assign' | 'backup' | 'settings' | 'accounts' | 'password'>('manage');
   // Dòng bài học đang mở phần xem trước
   const [previewLessonId, setPreviewLessonId] = useState<string | null>(null);
   // Máy chủ đã có sẵn khoá Gemini trong .env chưa (null = đang hỏi)
@@ -360,7 +373,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     setTitle(lesson.title || '');
     setGradeLevel(lesson.gradeLevel || 3);
     // Luôn điền tên mặc định: người đang sửa bài là giáo viên đứng tên
-    setTeacherName(DEFAULT_TEACHER_NAME);
+    setTeacherName(defaultAuthorName);
     setText(lesson.text || '');
     setTeacherNote(lesson.teacherNote || lesson.descriptionVi || '');
     setImageUrl(lesson.imageUrl || '');
@@ -406,44 +419,47 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     };
   }, [isOpen, activeTab, aiReady]);
 
-  // Handle Login with username & password (admin / Tanuyen@2026)
-  const handleLogin = (e: React.FormEvent) => {
+  // Đăng nhập quản trị: DUY NHẤT tài khoản "admin". Mật khẩu kiểm tra trên Supabase (đổi được qua OTP Gmail);
+  // mất mạng thì so với lần đăng nhập đúng gần nhất trên máy (xem src/lib/adminAuth.ts).
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanUser = username.trim().toLowerCase();
-    const cleanPass = password.trim();
+    if (authBusy) return;
+    setAuthBusy(true);
+    setAuthError('');
+    const result = await loginTeacher(username, password);
+    setAuthBusy(false);
 
-    // Hỗ trợ đăng nhập chuẩn: admin / Tanuyen@2026 (cùng dự phòng giaovien / Tanuyen@2026)
-    const isValidUser = cleanUser === 'admin' || cleanUser === 'giaovien';
-    const isValidPass = cleanPass === 'Tanuyen@2026' || cleanPass === 'Laichau@2026';
-
-    if (isValidUser && isValidPass) {
-      setIsAuthenticated(true);
+    if (result.ok) {
+      setTeacherSession(result.session);
       setAuthError('');
-      try {
-        localStorage.setItem('typing_kids_teacher_auth', 'true');
-      } catch {
-        // Ignore
-      }
+      setAuthNotice('');
+      setPassword('');
+      setActiveTab('manage');
+      if (result.session.role === 'teacher') setTeacherName(result.session.displayName);
     } else {
-      setAuthError('Tên đăng nhập hoặc mật khẩu không chính xác! Vui lòng kiểm tra lại.');
+      setAuthError(result.error);
     }
   };
 
   const handleLogout = () => {
-    setIsAuthenticated(false);
-    try {
-      localStorage.removeItem('typing_kids_teacher_auth');
-    } catch {
-      // Ignore
-    }
+    setTeacherSession(null);
+    setActiveTab('manage');
+    logoutTeacher();
   };
+
+  // Giáo viên phụ không có mục Giao bài / Sao lưu / Tài khoản: lỡ đang mở thì về danh sách bài
+  useEffect(() => {
+    if (teacherSession?.role === 'teacher' && (activeTab === 'assign' || activeTab === 'backup' || activeTab === 'accounts')) {
+      setActiveTab('manage');
+    }
+  }, [teacherSession, activeTab]);
 
   // Start new lesson from scratch
   const handleStartCreateNew = (asPoemOrProse = false) => {
     setEditingLessonId(null);
     setTitle('');
     setGradeLevel(3);
-    setTeacherName(DEFAULT_TEACHER_NAME);
+    setTeacherName(defaultAuthorName);
     setText('');
     setTeacherNote(
       asPoemOrProse
@@ -673,10 +689,24 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
       return;
     }
 
+    // Giáo viên phụ chỉ được sửa bài của chính mình (máy chủ cũng chặn)
+    if (editingLessonId) {
+      const editingOriginal =
+        (Array.isArray(allLessons) ? allLessons.find((l) => l?.id === editingLessonId) : undefined) ??
+        effectiveLessons.find((l) => l.id === editingLessonId);
+      if (editingOriginal && !canModifyLesson(editingOriginal)) {
+        triggerSaveToast('Bài này do người khác tạo nên tài khoản của thầy/cô không sửa được. Hãy bấm "Soạn bài mới".');
+        return;
+      }
+    }
+
     setIsSavingLesson(true);
 
     try {
-      const lessonId = editingLessonId || `teacher-${Date.now()}`;
+      // Mã bài gắn mã người tạo: teacher-GV001-1731830000000 (admin: teacher-1731830000000 như trước)
+      const lessonId =
+        editingLessonId ||
+        (teacherSession?.role === 'teacher' ? `teacher-${teacherSession.code}-${Date.now()}` : `teacher-${Date.now()}`);
       const cleanText = text.trim();
 
       let finalImageUrl = imageUrl.trim() || undefined;
@@ -736,7 +766,13 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
             // Chỉ tính lại phím trọng tâm khi nội dung đổi
             focusKeys: original.text === freshFields.text ? original.focusKeys : freshFields.focusKeys,
           }
-        : { id: lessonId, ...freshFields };
+        : {
+            id: lessonId,
+            ...freshFields,
+            // Hiện ngay mã người tạo trên máy; máy chủ tự ghi lại người tạo thật khi lưu
+            ownerId: teacherSession?.userId,
+            ownerCode: teacherSession?.code,
+          };
 
       // Đồng bộ hóa logic lưu trữ lên hệ thống đám mây Supabase / cơ sở dữ liệu
       const result = await onSaveLesson(updatedLesson);
@@ -765,6 +801,10 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
 
   // Toggle Free Practice for a lesson directly
   const handleToggleFreePractice = (lesson: Lesson) => {
+    if (!canModifyLesson(lesson)) {
+      triggerSaveToast('Bài này do người khác tạo nên không đổi được chế độ mở tự do.');
+      return;
+    }
     const nextState = !(lesson.isFreePractice ?? true);
     const updated: Lesson = {
       ...lesson,
@@ -1128,6 +1168,8 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     const isFree = l.isFreePractice ?? true;
     const isOpenPreview = previewLessonId === l.id;
     const kind = isPoem ? (l.genre === 'prose' ? 'Văn SGK' : 'Thơ SGK') : 'Luyện phím';
+    const canModify = canModifyLesson(l);
+    const canDelete = canModify && (isAdminRole || l.id.startsWith('teacher-'));
 
     return (
       <li key={`row-${l.id}`} data-lesson-row={l.id} className="border-b border-slate-100 last:border-b-0">
@@ -1145,6 +1187,17 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
           >
             <span className="block font-bold text-sm text-slate-900 truncate group-hover:text-emerald-700">
               {isOpenPreview ? '▾' : '▸'} {l.title}
+              {l.ownerCode && (
+                <span
+                  className={`ml-2 align-middle text-[11px] font-black px-1.5 py-0.5 rounded-md ${
+                    teacherSession?.userId && l.ownerId === teacherSession.userId ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                  }`}
+                  title="Mã tài khoản đã tạo bài này"
+                  data-owner-code={l.ownerCode}
+                >
+                  {l.ownerCode}
+                </span>
+              )}
             </span>
             <span className="block text-xs text-slate-500 truncate">
               {(l.text || '').replace(/\s+/g, ' ').slice(0, 90) || '(Chưa có nội dung)'}
@@ -1177,15 +1230,19 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
             <button
               type="button"
               onClick={() => {
+                if (!canModify) return;
                 loadLessonIntoEditor(l);
                 setActiveTab('editor');
               }}
-              className="h-8 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 cursor-pointer"
-              title="Sửa nội dung, ảnh SGK của bài này"
+              disabled={!canModify}
+              data-action="edit-lesson"
+              className="h-8 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1 cursor-pointer"
+              title={canModify ? 'Sửa nội dung, ảnh SGK của bài này' : 'Bài do người khác tạo: chỉ xem và gõ thử'}
             >
               <Edit3 className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Sửa</span>
             </button>
+            {isAdminRole && (
             <button
               type="button"
               onClick={() => {
@@ -1202,6 +1259,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
               <Send className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Giao</span>
             </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -1214,12 +1272,16 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
             >
               <Eye className="w-4 h-4" />
             </button>
-            {l.id.startsWith('teacher-') && (
+            {canDelete && (
               <button
                 type="button"
-                onClick={() => {
-                  if (window.confirm(`Cô có chắc muốn xoá bài "${l.title}"? Thao tác này không hoàn tác được.`)) {
-                    onDeleteLesson(l.id);
+                data-action="delete-lesson"
+                onClick={async () => {
+                  if (window.confirm(`Thầy/cô có chắc muốn xoá bài "${l.title}"? Thao tác này không hoàn tác được.`)) {
+                    const ok = await onDeleteLesson(l.id);
+                    if (ok === false) {
+                      triggerSaveToast('Máy chủ từ chối xoá: bài này không do tài khoản của thầy/cô tạo.');
+                    }
                   }
                 }}
                 className="h-8 w-8 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center cursor-pointer"
@@ -1378,7 +1440,23 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                 </p>
               </div>
 
+              {showRecovery ? (
+                <AdminPasswordRecovery
+                  onBack={() => setShowRecovery(false)}
+                  onDone={() => {
+                    setShowRecovery(false);
+                    setPassword('');
+                    setAuthError('');
+                    setAuthNotice('Đã cập nhật mật khẩu mới. Hãy đăng nhập bằng mật khẩu mới.');
+                  }}
+                />
+              ) : (
               <form onSubmit={handleLogin} className="space-y-3 text-left">
+                {authNotice && (
+                  <p className="text-xs text-emerald-700 font-bold bg-emerald-50 border border-emerald-200 rounded-xl p-2.5" data-testid="auth-notice">
+                    {authNotice}
+                  </p>
+                )}
                 <div>
                   <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
                     Tên đăng nhập:
@@ -1430,12 +1508,26 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                 <div className="pt-2">
                   <button
                     type="submit"
-                    className="w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm shadow-md transition-all cursor-pointer border-b-2 border-emerald-800 active:border-b-0 active:scale-98"
+                    disabled={authBusy}
+                    className="w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-black text-sm shadow-md transition-all cursor-pointer border-b-2 border-emerald-800 active:border-b-0 active:scale-98"
                   >
-                    Đăng Nhập Quản Trị
+                    {authBusy ? 'Đang kiểm tra…' : 'Đăng Nhập Quản Trị'}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="forgot-password"
+                    onClick={() => {
+                      setAuthError('');
+                      setAuthNotice('');
+                      setShowRecovery(true);
+                    }}
+                    className="w-full mt-2 min-h-[36px] text-xs font-bold text-sky-700 hover:underline cursor-pointer"
+                  >
+                    Quên mật khẩu? Khôi phục bằng mã OTP qua Gmail
                   </button>
                 </div>
               </form>
+              )}
             </div>
           </div>
         ) : (
@@ -1448,11 +1540,17 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
               {[
                 { id: 'manage' as const, icon: <BookOpen className="w-5 h-5" />, label: 'Bài học', extra: String(effectiveLessons.length) },
                 { id: 'editor' as const, icon: <Edit3 className="w-5 h-5" />, label: editingLessonId ? 'Sửa bài' : 'Soạn bài', extra: '' },
-                { id: 'assign' as const, icon: <Send className="w-5 h-5" />, label: 'Giao bài', extra: allAssignedLessonIds.size > 0 ? String(allAssignedLessonIds.size) : '' },
-                { id: 'backup' as const, icon: <HardDrive className="w-5 h-5" />, label: 'Sao lưu & đồng bộ', extra: '' },
+                ...(isAdminRole
+                  ? [
+                      { id: 'assign' as const, icon: <Send className="w-5 h-5" />, label: 'Giao bài', extra: allAssignedLessonIds.size > 0 ? String(allAssignedLessonIds.size) : '' },
+                      { id: 'backup' as const, icon: <HardDrive className="w-5 h-5" />, label: 'Sao lưu & đồng bộ', extra: '' },
+                    ]
+                  : []),
                 ...(classroomSettings
                   ? [{ id: 'settings' as const, icon: <SlidersHorizontal className="w-5 h-5" />, label: 'Cài đặt lớp học', extra: '' }]
                   : []),
+                ...(isAdminRole ? [{ id: 'accounts' as const, icon: <UserCheck className="w-5 h-5" />, label: 'Tài khoản giáo viên', extra: '' }] : []),
+                { id: 'password' as const, icon: <KeyRound className="w-5 h-5" />, label: 'Đổi mật khẩu', extra: '' },
               ].map((item) => {
                 const active = activeTab === item.id;
                 return (
@@ -1481,6 +1579,12 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                 );
               })}
               <div className="flex-1" />
+              {teacherSession && (
+                <div className="hidden lg:block px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-600" data-testid="teacher-identity">
+                  <span className="font-black text-emerald-700">{teacherSession.code}</span> · {teacherSession.displayName}
+                  {teacherSession.mode === 'offline' && <span className="block text-amber-700 font-semibold">Đang mất mạng</span>}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={handleLogout}
@@ -2154,7 +2258,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
               {/* ========================================================================= */}
               {/* TAB 4: GIAO 1 HOẶC NHIỀU BÀI TẬP CÙNG LÚC CHO KHỐI LỚP (ASSIGN TAB)       */}
               {/* ========================================================================= */}
-              {activeTab === 'assign' && (
+              {activeTab === 'assign' && isAdminRole && (
                 <form onSubmit={handleAssignSubmit} className="space-y-4 max-w-4xl mx-auto py-1">
                   <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-50 via-teal-50 to-sky-50 border-2 border-emerald-300 text-center shadow-xs">
                     <span className="text-2xl mb-0.5 block">🎯</span>
@@ -2537,7 +2641,11 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                 </div>
               )}
 
-              {activeTab === 'backup' && (
+              {activeTab === 'accounts' && isAdminRole && <TeacherAccountsPanel offline={teacherSession?.mode === 'offline'} />}
+
+              {activeTab === 'password' && teacherSession && <ChangeOwnPasswordPanel session={teacherSession} />}
+
+              {activeTab === 'backup' && isAdminRole && (
                 <div className="space-y-3 max-w-4xl">
                   <h3 className="text-lg font-black text-slate-900">Sao lưu &amp; đồng bộ</h3>
                   <div className="grid gap-3 md:grid-cols-3">

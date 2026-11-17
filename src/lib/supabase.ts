@@ -73,6 +73,8 @@ export async function fetchLessonsFromSupabase(): Promise<Lesson[] | null> {
         targetAccuracy: item.target_accuracy || 85,
         badgeName: item.badge_name || 'Bé Luyện Gõ Siêu Tốc',
         authorTeacher: item.author_teacher || undefined,
+        ownerId: item.owner_id || undefined,
+        ownerCode: item.owner_code || undefined,
         teacherNote: item.teacher_note || undefined,
         imageUrl: item.image_url || undefined,
         bookPage: item.book_page || undefined,
@@ -126,17 +128,25 @@ export async function upsertLessonToSupabase(lesson: Lesson): Promise<boolean> {
 /**
  * Xóa một bài học khỏi Supabase
  */
-export async function deleteLessonFromSupabase(lessonId: string): Promise<boolean> {
+export type CloudWriteResult = 'ok' | 'denied' | 'error';
+
+export async function deleteLessonFromSupabase(lessonId: string): Promise<CloudWriteResult> {
   try {
-    const { error } = await supabase.from('lessons').delete().eq('id', lessonId);
+    // .select() để biết có xoá được dòng nào không: bị quy tắc quyền chặn thì Supabase không báo lỗi mà xoá 0 dòng
+    const { data, error } = await supabase.from('lessons').delete().eq('id', lessonId).select('id');
     if (error) {
       console.error('Lỗi khi xóa bài học trên Supabase:', error.message);
-      return false;
+      return error.code === '42501' ? 'denied' : 'error';
     }
-    return true;
+    if (Array.isArray(data) && data.length === 0) {
+      // Không có dòng nào bị xoá: bài không có trên máy chủ, hoặc không có quyền xoá
+      const { data: still } = await supabase.from('lessons').select('id').eq('id', lessonId).maybeSingle();
+      return still ? 'denied' : 'ok';
+    }
+    return 'ok';
   } catch (err: any) {
     console.error('Ngoại lệ khi xóa bài học trên Supabase:', err.message);
-    return false;
+    return 'error';
   }
 }
 

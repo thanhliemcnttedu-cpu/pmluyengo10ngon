@@ -1,32 +1,41 @@
 {
   "appId": "com.luyengo10ngon.app",
   "productName": "LuyenGo10Ngon",
+  "copyright": "Tác giả: Nguyễn Thanh Liêm",
   "directories": {
-    "output": "dist_electron"
+    "output": "release",
+    "buildResources": "installer"
   },
   "files": [
-    "dist/**/*",
+    { "from": "build-desktop/web", "to": "dist", "filter": ["**/*"] },
     "electron/**/*",
     "package.json"
   ],
   "win": {
     "target": [
-      {
-        "target": "nsis",
-        "arch": ["x64"]
-      },
-      {
-        "target": "portable",
-        "arch": ["x64"]
-      }
+      { "target": "nsis", "arch": ["x64"] }
     ],
-    "icon": "public/favicon.svg"
+    "icon": "installer/icon.ico",
+    "executableName": "LuyenGo10Ngon"
   },
   "nsis": {
     "oneClick": false,
-    "allowToChangeInstallationDirectory": true,
-    "createDesktopShortcut": true,
+    "perMachine": true,
+    "allowElevation": true,
+    "allowToChangeInstallationDirectory": false,
+    "createDesktopShortcut": "always",
     "createStartMenuShortcut": true,
-    "shortcutName": "Luyện Gõ 10 Ngón Tiểu Học"
+    "shortcutName": "Luyện Gõ 10 Ngón Tiểu Học",
+    "runAfterFinish": true,
+    "deleteAppDataOnUninstall": false,
+    "installerIcon": "installer/icon.ico",
+    "uninstallerIcon": "installer/icon.ico",
+    "installerHeaderIcon": "installer/icon.ico",
+    "installerSidebar": "installer/sidebar.bmp",
+    "uninstallerSidebar": "installer/sidebar.bmp",
+    "installerHeader": "installer/header.bmp",
+    "include": "installer/installer.nsh",
+    "artifactName": "BeLuyenGo10Ngon-Setup-${version}.exe",
+    "uninstallDisplayName": "Bé Luyện Gõ 10 Ngón ${version}"
   }
 }

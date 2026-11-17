@@ -184,6 +184,8 @@ export interface Lesson {
   imageUrl?: string;        // Ảnh chụp SGK hoặc ảnh bài thơ / đoạn văn
   gradeLevel?: number;      // Lớp 1, 2, 3, 4, 5
   authorTeacher?: string;   // Tên giáo viên đăng bài
+  ownerId?: string;         // Tài khoản tạo bài (Supabase). Giáo viên phụ chỉ sửa/xoá bài có ownerId của mình
+  ownerCode?: string;       // Mã người tạo: ADMIN, GV001, GV002...
   teacherNote?: string;     // Lời dặn dò của giáo viên
   bookPage?: string;        // Trang sách giáo khoa (VD: 'Trang 28-29')
   isAssignedHomework?: boolean; // Được giáo viên giao bài tập cho khối lớp

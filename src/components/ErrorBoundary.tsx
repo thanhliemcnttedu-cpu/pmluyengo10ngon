@@ -45,6 +45,8 @@ export class ErrorBoundary extends Component<Props, State> {
       localStorage.removeItem('typing_kids_all_lessons');
       localStorage.removeItem('typing_kids_grade_assignments');
       localStorage.removeItem('typing_kids_teacher_auth');
+      localStorage.removeItem('typing_kids_teacher_auth_v2');
+      localStorage.removeItem('typing_kids_teacher_session_v1');
     } catch {
       // Ignore
     }

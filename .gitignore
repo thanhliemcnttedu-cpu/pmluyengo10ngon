@@ -11,3 +11,5 @@ coverage/
 dist_electron/
 release/
 .mesh/
+# Bản dựng giao diện dùng riêng cho bộ cài (npm run build:exe)
+build-desktop/
