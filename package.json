@@ -1,7 +1,7 @@
 {
   "name": "react-example",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Bé Luyện Gõ 10 Ngón - phần mềm luyện gõ bàn phím 10 ngón cho học sinh Tiểu học",
   "author": "Nguyễn Thanh Liêm",
   "main": "electron/main.cjs",

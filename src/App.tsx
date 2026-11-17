@@ -33,6 +33,15 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { useSmartAutoFitViewport } from './utils/smartViewportEngine';
 import { SmartViewportModal } from './components/SmartViewportModal';
 import {
+  sortLessonsLogically,
+  applyLessonNumbers,
+  stripLessonNumber,
+  storedLessonNumber,
+  isNumpadLesson,
+  displayedLessonNumber,
+  lessonSortKeys,
+} from './utils/lessonNumbering';
+import {
   fetchLessonsFromSupabase,
   upsertLessonToSupabase,
   deleteLessonFromSupabase,
@@ -65,28 +74,8 @@ import {
 } from 'lucide-react';
 
 // Hàm sắp xếp tự động các bài học theo đúng tiến trình logic chuẩn (Bài 1, Bài 2, Bài 3, Bài 4...)
-export const sortLessonsLogically = (lessons: Lesson[]): Lesson[] => {
-  return [...lessons].sort((a, b) => {
-    // 1. Phân tích số thứ tự "Bài <X>" từ tiêu đề
-    const matchA = a.title.match(/(?:Bài|bài)\s*(\d+)/i);
-    const matchB = b.title.match(/(?:Bài|bài)\s*(\d+)/i);
-    if (matchA && matchB) {
-      const numA = parseInt(matchA[1], 10);
-      const numB = parseInt(matchB[1], 10);
-      if (numA !== numB) return numA - numB;
-    } else if (matchA) {
-      return -1;
-    } else if (matchB) {
-      return 1;
-    }
-    // 2. So sánh theo cấp độ (level)
-    if (a.level !== undefined && b.level !== undefined && a.level !== b.level) {
-      return a.level - b.level;
-    }
-    // 3. Fallback theo id
-    return a.id.localeCompare(b.id, undefined, { numeric: true });
-  });
-};
+// Sắp xếp bài theo số bài: dùng chung với phần tự đánh số (src/utils/lessonNumbering.ts)
+export { sortLessonsLogically };
 
 // Cài đặt mặc định (dùng chung cho lần đầu và khi ghép cài đặt cũ thiếu trường)
 const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -278,10 +267,11 @@ export default function App() {
     };
   }, []);
 
-  const allAvailableLessons = allLessons;
+  // Hệ thống tự đánh số "Bài N" theo vị trí trong từng khối lớp (thêm bài +1, xoá bài các bài sau lùi số)
+  const allAvailableLessons = useMemo(() => applyLessonNumbers(allLessons), [allLessons]);
   const teacherLessons = useMemo(() => {
-    return allLessons.filter((l) => l.id.startsWith('teacher-') || !!l.authorTeacher);
-  }, [allLessons]);
+    return allAvailableLessons.filter((l) => l.id.startsWith('teacher-') || !!l.authorTeacher);
+  }, [allAvailableLessons]);
 
   // Grade Assignments (Bài tập được giáo viên giao cho từng khối lớp - 1 hoặc nhiều bài)
   const [gradeAssignments, setGradeAssignments] = useState<Record<number, GradeAssignment>>(() => {
@@ -810,7 +800,28 @@ export default function App() {
   };
 
   // Save teacher lessons persistently online to server & localStorage
-  const handleSaveTeacherLesson = async (newLesson: Lesson) => {
+  const handleSaveTeacherLesson = async (incoming: Lesson) => {
+    // Số bài lưu kèm tên chỉ để giữ THỨ TỰ; số hiển thị luôn được đếm lại theo vị trí.
+    //  - Bài mới / chuyển sang khối khác: đứng cuối khối (số lớn hơn mọi bài đang có).
+    //  - Sửa bài trong cùng khối: giữ nguyên số cũ để bài không đổi chỗ.
+    const raw = allLessons.find((l) => l.id === incoming.id);
+    let newLesson: Lesson = incoming;
+    if (!isNumpadLesson(incoming)) {
+      const name = stripLessonNumber(incoming.title);
+      let storedTitle: string;
+      if (raw && raw.gradeLevel === incoming.gradeLevel) {
+        const n = storedLessonNumber(raw.title);
+        storedTitle = n !== null ? `Bài ${n}: ${name}` : name;
+      } else {
+        const same = allLessons.filter(
+          (l) => l.gradeLevel === incoming.gradeLevel && !isNumpadLesson(l) && l.id !== incoming.id
+        );
+        // Lớn hơn mọi khoá sắp xếp trong khối (kể cả khoá ảo của bài cũ không ghi số) -> đứng cuối
+        const maxKey = Math.max(0, same.length, ...lessonSortKeys(same).values());
+        storedTitle = `Bài ${maxKey + 1}: ${name}`;
+      }
+      newLesson = { ...incoming, title: storedTitle };
+    }
     let updatedList: Lesson[];
     const exists = allLessons.some((l) => l.id === newLesson.id);
     if (exists) {
@@ -847,10 +858,31 @@ export default function App() {
       console.error('Lỗi khi lưu bài học trực tuyến:', err);
     }
 
-    setCustomLesson(newLesson);
+    // Bài đang luyện hiện đúng số bài hệ thống vừa đánh
+    setCustomLesson(applyLessonNumbers(updatedList).find((l) => l.id === newLesson.id) ?? newLesson);
     handleRestart();
     // Báo cho Góc Giáo Viên biết bài không lưu được ở đâu ngoài máy này (để hiện cảnh báo đỏ)
     return cloudOk || serverOk;
+  };
+
+  // Admin: ghi số thứ tự đang hiển thị vào tên bài trên máy chủ (dọn số cũ bị nhảy cóc / thiếu số)
+  const handleRenumberLessons = async (): Promise<{ changed: number; ok: boolean }> => {
+    const normalized = applyLessonNumbers(allLessons);
+    const changed = normalized.filter((l, i) => l.title !== allLessons[i].title);
+    if (changed.length === 0) return { changed: 0, ok: true };
+    setAllLessons(normalized);
+    try {
+      localStorage.setItem('typing_kids_all_lessons', JSON.stringify(normalized));
+    } catch {
+      // Ignore
+    }
+    let ok = false;
+    try {
+      ok = await bulkUpsertLessonsToSupabase(changed);
+    } catch (err) {
+      console.warn('Lỗi khi lưu số thứ tự bài lên Supabase:', err);
+    }
+    return { changed: changed.length, ok };
   };
 
   // Trả về false khi máy chủ TỪ CHỐI QUYỀN xoá (giáo viên phụ xoá bài không phải của mình):
@@ -2359,9 +2391,9 @@ export default function App() {
                       ? 'bg-amber-300 text-slate-950 shadow-xs'
                       : 'bg-white/80 hover:bg-white text-emerald-950'
                   }`}
-                  title={`Bài ${idx + 1}: ${item.title}`}
+                  title={item.title}
                 >
-                  Bài {idx + 1} {isCurrent && '⭐'}
+                  Bài {displayedLessonNumber(item) ?? idx + 1} {isCurrent && '⭐'}
                 </button>
               );
             })}
@@ -2673,6 +2705,7 @@ export default function App() {
               setEditingLessonForModal(null);
             }}
             onSaveLesson={handleSaveTeacherLesson}
+            onRenumberLessons={handleRenumberLessons}
             allLessons={allAvailableLessons}
             teacherLessons={teacherLessons}
             onDeleteLesson={handleDeleteTeacherLesson}

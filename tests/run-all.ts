@@ -9,6 +9,7 @@ import './scoring.test';
 import './anatomy.test';
 import './games.test';
 import './geminiOcr.test';
+import './numbering.test';
 
 const results = runRegistered();
 let failed = 0;

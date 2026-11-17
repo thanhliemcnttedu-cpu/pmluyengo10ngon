@@ -586,7 +586,7 @@ export const TextbookImageViewer: React.FC<TextbookImageViewerProps> = ({
                           >
                             <UserCheck className="w-3.5 h-3.5" />
                             <span>
-                              {isCurrent ? '⭐ Đang Luyện Bài Này' : `Luyện Bài ${idx + 1}: ${item.title} ➜`}
+                              {isCurrent ? '⭐ Đang Luyện Bài Này' : `Luyện ${item.title} ➜`}
                             </span>
                           </button>
                         </div>

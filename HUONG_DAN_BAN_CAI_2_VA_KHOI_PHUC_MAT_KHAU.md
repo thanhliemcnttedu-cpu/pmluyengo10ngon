@@ -9,7 +9,7 @@
 
 ## 2. Cài đặt trên máy học sinh / giáo viên
 
-1. Chép tệp `BeLuyenGo10Ngon-Setup-2.0.0.exe` vào máy.
+1. Chép tệp `BeLuyenGo10Ngon-Setup-2.1.0.exe` (bản mới nhất) vào máy. Máy đã cài 2.0.0 cũng cài đè 2.1.0 được, không cần gỡ.
 2. Chuột phải vào tệp → **Open** (hoặc **Run as administrator**).
 3. Nếu Windows hiện màn xanh "Windows protected your PC": bấm **More info** → **Run anyway**. (Bộ cài chưa có chữ ký số trả phí nên Windows cảnh báo; phần mềm vẫn an toàn.)
 4. Hộp hỏi quyền quản trị (UAC): bấm **Yes**.
@@ -89,6 +89,15 @@ Quy tắc nằm trong cơ sở dữ liệu Supabase nên không ai vượt quy�
 > **Lưu ý quan trọng:** sau khi chạy SQL ở bước 1, **chỉ ai đăng nhập** mới thêm/sửa bài được. Vì vậy phải làm mục 4.1 (tạo tài khoản admin trên Supabase) và 4.4 (khai báo `VITE_ADMIN_EMAIL` trên Vercel) **trước**, nếu không admin cũng không lưu bài lên máy chủ được.
 >
 > Xoá tài khoản giáo viên: bài người đó đã tạo **vẫn giữ lại**, admin quản lý tiếp.
+
+### Tự đánh số bài
+
+- Số **"Bài N"** do hệ thống tự đếm theo từng khối lớp (Lớp 3, 4, 5 đếm riêng). Người soạn chỉ gõ **tên bài**; ô "Bài N:" đứng trước ô tên tự hiện số.
+- Thêm bài mới: bài đứng cuối khối, nhận số = số bài đang có + 1 (đang có 17 bài thì bài mới là Bài 18).
+- Xoá bài: các bài phía sau tự lùi số (20 bài, xoá 1 bài còn 19, Bài 20 thành Bài 19).
+- Bài phím số Numpad giữ dãy số riêng "Bài Numpad N".
+- Mỗi bài vẫn gắn mã người tạo (ADMIN, GV001…), hiện ở nhãn bên cạnh tên bài trong danh sách của Góc Giáo Viên.
+- **Admin làm 1 lần sau khi cập nhật:** Góc Giáo Viên → danh sách bài → bấm **"Đánh lại số thứ tự bài"**. Nút này ghi số thứ tự đang hiển thị vào tên bài trên máy chủ, dọn các số cũ gõ tay bị nhảy cóc hoặc trùng (ví dụ Lớp 3 hiện có 25 bài nhưng tên ghi số 1–24 và một bài không có số).
 
 ## 7. Dựng lại bản cài (dành cho người phát triển)
 

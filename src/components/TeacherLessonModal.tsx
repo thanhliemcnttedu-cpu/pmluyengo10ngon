@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { stripLessonNumber, isNumpadLesson, displayedLessonNumber, nextLessonNumber } from '../utils/lessonNumbering';
 import { loginTeacher, logoutTeacher, loadTeacherSession, type TeacherSession } from '../lib/adminAuth';
 import { TeacherAccountsPanel } from './TeacherAccountsPanel';
 import { ChangeOwnPasswordPanel } from './ChangeOwnPasswordPanel';
@@ -138,6 +139,8 @@ interface TeacherLessonModalProps {
     importedAssignments?: Record<number, GradeAssignment>
   ) => void;
   initialEditingLesson?: Lesson | null;
+  /** Admin: ghi số thứ tự bài đang hiển thị lên máy chủ */
+  onRenumberLessons?: () => Promise<{ changed: number; ok: boolean }>;
   /** Cài đặt lớp học (trước đây ở menu thả xuống của nút Giáo viên) */
   classroomSettings?: {
     isTextbookVisible: boolean;
@@ -162,6 +165,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   teacherLessons = [],
   onDeleteLesson,
   onResetSystemLesson,
+  onRenumberLessons,
   onSelectLesson,
   gradeAssignments = {},
   onAssignLessonToGrade,
@@ -224,6 +228,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   // Editor states
   const [editingLessonId, setEditingLessonId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
+  const [renumberBusy, setRenumberBusy] = useState(false);
   const [gradeLevel, setGradeLevel] = useState<number>(3);
   const [teacherName, setTeacherName] = useState(DEFAULT_TEACHER_NAME);
   const [text, setText] = useState('');
@@ -328,6 +333,15 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
       }));
   }, [allLessons, teacherLessons]);
 
+  // Số "Bài N" sẽ hiện cho bài đang soạn: sửa bài trong cùng khối giữ số cũ, bài mới / đổi khối = số bài trong khối + 1
+  const lessonNumberPreview = useMemo(() => {
+    const orig = editingLessonId ? effectiveLessons.find((l) => l.id === editingLessonId) : undefined;
+    if (orig && orig.gradeLevel === gradeLevel) {
+      return displayedLessonNumber(orig) ?? nextLessonNumber(effectiveLessons, gradeLevel, editingLessonId);
+    }
+    return nextLessonNumber(effectiveLessons, gradeLevel, editingLessonId);
+  }, [effectiveLessons, editingLessonId, gradeLevel]);
+
   // Lấy danh sách ID của tất cả bài đang được giao bài cho bất kỳ lớp nào (Safely)
   const allAssignedLessonIds = useMemo(() => {
     const ids = new Set<string>();
@@ -370,7 +384,8 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const loadLessonIntoEditor = (lesson: Lesson | null | undefined) => {
     if (!lesson) return;
     setEditingLessonId(lesson.id || null);
-    setTitle(lesson.title || '');
+    // Ô tên chỉ chứa tên bài; số "Bài N" do hệ thống tự đánh
+    setTitle(isNumpadLesson(lesson) ? lesson.title || '' : stripLessonNumber(lesson.title || ''));
     setGradeLevel(lesson.gradeLevel || 3);
     // Luôn điền tên mặc định: người đang sửa bài là giáo viên đứng tên
     setTeacherName(defaultAuthorName);
@@ -782,7 +797,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
         return;
       }
       setLastSavedLesson(updatedLesson);
-      setSaveSuccessMsg(`🎉 Đã lưu bài "${updatedLesson.title}" và cập nhật hệ thống thành công!`);
+      setSaveSuccessMsg(`🎉 Đã lưu "Bài ${lessonNumberPreview}: ${stripLessonNumber(updatedLesson.title)}" và cập nhật hệ thống thành công!`);
       setEditingLessonId(updatedLesson.id);
 
       // Kích hoạt ngay bảng thông báo nổi Toast Notification hiển thị trong đúng 3 giây
@@ -1629,6 +1644,30 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                   {/* Tiêu đề mục + nút chính duy nhất */}
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <h3 className="text-lg font-black text-slate-900">Bài học <span className="text-slate-400 font-bold">({filteredManageLessons.length})</span></h3>
+                    <div className="flex items-center gap-2 flex-wrap">
+                    {isAdminRole && onRenumberLessons && (
+                      <button
+                        type="button"
+                        data-testid="renumber-lessons"
+                        disabled={renumberBusy}
+                        title="Ghi số thứ tự bài đang hiển thị (Bài 1, Bài 2…) vào tên bài trên máy chủ, dọn các số cũ bị nhảy cóc"
+                        onClick={async () => {
+                          setRenumberBusy(true);
+                          const r = await onRenumberLessons();
+                          setRenumberBusy(false);
+                          triggerSaveToast(
+                            r.changed === 0
+                              ? 'Số thứ tự bài trên máy chủ đã đúng, không cần sửa.'
+                              : r.ok
+                              ? `Đã đánh lại số cho ${r.changed} bài và lưu lên máy chủ.`
+                              : `Đã đánh lại số cho ${r.changed} bài trên máy này nhưng chưa lưu được lên máy chủ. Thầy kiểm tra mạng rồi bấm lại.`
+                          );
+                        }}
+                        className="min-h-[40px] px-4 rounded-full bg-white border-2 border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-sm cursor-pointer disabled:opacity-60"
+                      >
+                        {renumberBusy ? 'Đang đánh số…' : 'Đánh lại số thứ tự bài'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => handleStartCreateNew(false)}
@@ -1636,6 +1675,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                     >
                       <Plus className="w-4 h-4" /> Soạn bài mới
                     </button>
+                    </div>
                   </div>
 
                   {/* Bộ lọc (gồm cả Thơ & Văn SGK) · tìm kiếm · sắp xếp */}
@@ -2081,14 +2121,25 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                       <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
                         Tên bài học / bài thơ: <span className="text-rose-500">*</span>
                       </label>
-                      <input
-                        type="text"
-                        value={title}
-                        onChange={(e) => setTitle(e.target.value)}
-                        placeholder="Ví dụ: Thơ Mèo Con Đi Học, Quê Hương, Hạt Gạo Làng Ta..."
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-300 text-slate-900 text-xs font-bold focus:outline-none focus:border-emerald-500"
-                        required
-                      />
+                      <div className="flex items-stretch gap-1.5">
+                        {/* Số bài do hệ thống tự đánh theo khối lớp: không sửa tay */}
+                        <span
+                          data-testid="lesson-number-preview"
+                          title="Hệ thống tự đánh số bài theo khối lớp: thêm bài thì cộng 1, xoá bài thì các bài sau tự lùi số"
+                          className="shrink-0 px-2.5 rounded-xl bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-black flex items-center whitespace-nowrap"
+                        >
+                          Bài {lessonNumberPreview}:
+                        </span>
+                        <input
+                          type="text"
+                          value={title}
+                          onChange={(e) => setTitle(e.target.value)}
+                          placeholder="Ví dụ: Thơ Mèo Con Đi Học, Quê Hương, Hạt Gạo Làng Ta..."
+                          className="min-w-0 flex-1 px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-300 text-slate-900 text-xs font-bold focus:outline-none focus:border-emerald-500"
+                          required
+                        />
+                      </div>
+                      <p className="text-[11px] text-slate-500 font-semibold mt-1">Số bài do hệ thống tự đánh theo khối lớp, thầy cô chỉ gõ tên bài.</p>
                     </div>
 
                     <div className="sm:col-span-2">
