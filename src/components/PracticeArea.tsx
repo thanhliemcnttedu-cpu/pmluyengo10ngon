@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
+import { ScoreBoard } from './ScoreBoard';
 import {
   Lesson,
   TypingStats,
@@ -27,6 +28,8 @@ import {
 
 interface PracticeAreaProps {
   lesson: Lesson;
+  /** Số liệu bảng điểm 5 ô (thời gian, điểm, từ đúng, chính xác, tốc độ) */
+  scoreBoard?: React.ComponentProps<typeof ScoreBoard>;
   targetText: string;
   currentCharIndex: number;
   currentSubStepIndex?: number;
@@ -112,6 +115,7 @@ const ENCOURAGEMENT_MESSAGES = [
 
 export const PracticeArea: React.FC<PracticeAreaProps> = ({
   lesson,
+  scoreBoard,
   targetText,
   currentCharIndex,
   activeFinger,
@@ -406,7 +410,10 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
       const line = tokenLines[idx];
       const lineStart = line[0]?.startIndex ?? 0;
       const lineEnd = line[line.length - 1]?.endIndex ?? 0;
-      if (currentCharIndex >= lineStart && currentCharIndex <= lineEnd) {
+      // endIndex là vị trí sau ký tự cuối (sau ký tự xuống dòng = đầu dòng kế), nên dùng '<' để không nhận nhầm dòng trước.
+      // Dòng cuối nhận cả trường hợp đã gõ hết (currentCharIndex === độ dài văn bản).
+      const isLastLine = idx === tokenLines.length - 1;
+      if (currentCharIndex >= lineStart && (currentCharIndex < lineEnd || isLastLine)) {
         currentLineIdx = idx;
         break;
       }
@@ -518,7 +525,8 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
     setIsInputFocused(true);
   };
 
-  const progressPercent = Math.min(100, Math.round((currentCharIndex / targetText.length) * 100));
+  // Văn bản rỗng thì chia cho 0 ra NaN, hiển thị "NaN%".
+  const progressPercent = targetText.length > 0 ? Math.min(100, Math.round((currentCharIndex / targetText.length) * 100)) : 0;
 
   const fontSizeClass =
     textSize === 'huge'
@@ -555,30 +563,10 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
       <div className="flex items-center justify-between gap-1.5 flex-wrap pb-1 border-b border-sky-100">
         {/* Left: Grade badge, Title, Target WPM, Chunking indicator */}
         <div className="flex items-center gap-1.5 min-w-0">
-          {lesson.gradeLevel && (
-            <span className="text-[10px] bg-gradient-to-r from-sky-600 to-indigo-600 text-white px-2 py-0.5 rounded-full font-black shadow-2xs shrink-0">
-              Lớp {lesson.gradeLevel}
-            </span>
-          )}
-          <h2 className="text-xs sm:text-sm font-black text-slate-900 truncate tracking-tight max-w-[200px] sm:max-w-[320px]">
+          {/* Lớp đã hiện ở thanh trên, mục tiêu tốc độ ở bảng điểm, chặng ở cạnh văn bản -> chỉ giữ tên bài */}
+          <h2 className="text-base font-black text-slate-900 truncate tracking-tight max-w-[260px] sm:max-w-[460px]">
             {lesson.title}
           </h2>
-          <span className="text-[9px] bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.2 rounded-full font-bold shrink-0 hidden sm:inline">
-            🎯 {lesson.targetWpm} WPM
-          </span>
-
-          {/* Huy hiệu chia nhỏ chặng cần đạt */}
-          {chunkInfo.hasChunks && (
-            <span className="text-[9px] bg-indigo-100 text-indigo-900 border border-indigo-300 px-2 py-0.2 rounded-full font-black shrink-0 hidden md:inline">
-              🚩 {chunkInfo.chunkTitle}
-            </span>
-          )}
-
-          {lesson.isAssignedHomework && (
-            <span className="text-[9px] bg-rose-500 text-white px-1.5 py-0.2 rounded-full font-black shrink-0 animate-pulse hidden md:inline">
-              Cô Giao
-            </span>
-          )}
         </div>
 
         {/* Right: Streamlined Action Buttons */}
@@ -587,11 +575,11 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
             <button
               type="button"
               onClick={onOpenCurriculumModal}
-              className="py-0.5 px-2 rounded-lg bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-black text-[11px] flex items-center gap-1 shadow-2xs transition-all cursor-pointer active:scale-95"
-              title="Mở danh mục chọn bài học SGK"
+              className="min-h-[36px] px-4 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-black text-[15px] flex items-center gap-1.5 shadow-sm transition-all cursor-pointer active:scale-95"
+              title="Mở danh sách bài học của lớp để chọn bài"
             >
-              <BookOpen className="w-3 h-3" />
-              <span>Chọn bài</span>
+              <BookOpen className="w-5 h-5" />
+              <span>📚 Chọn bài</span>
             </button>
           )}
 
@@ -619,40 +607,40 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
             <button
               type="button"
               onClick={() => onVoiceSpeak(targetText.slice(currentCharIndex, currentCharIndex + 25) || lesson.title)}
-              className="p-1 rounded-md hover:bg-white text-slate-700 transition-colors cursor-pointer"
+              className="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-md hover:bg-white text-slate-700 transition-colors cursor-pointer"
               title="Nghe phát âm"
             >
-              <Volume2 className="w-3 h-3 text-sky-600" />
+              <Volume2 className="w-5 h-5 text-sky-600" />
             </button>
             <button
               type="button"
               onClick={onRestart}
-              className="p-1 rounded-md hover:bg-white text-slate-700 transition-colors cursor-pointer"
+              className="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-md hover:bg-white text-slate-700 transition-colors cursor-pointer"
               title="Làm lại từ đầu"
             >
-              <RotateCcw className="w-3 h-3 text-amber-600" />
+              <RotateCcw className="w-5 h-5 text-amber-600" />
             </button>
             <button
               type="button"
               disabled={!hasPrevLesson}
               onClick={onPrevLesson}
-              className={`p-1 rounded-md transition-colors ${
+              className={`min-h-[32px] min-w-[32px] flex items-center justify-center rounded-md transition-colors ${
                 hasPrevLesson ? 'hover:bg-white text-slate-700 cursor-pointer' : 'opacity-30 text-slate-400 cursor-not-allowed'
               }`}
               title="Bài trước"
             >
-              <ChevronLeft className="w-3 h-3" />
+              <ChevronLeft className="w-5 h-5" />
             </button>
             <button
               type="button"
               disabled={!hasNextLesson}
               onClick={onNextLesson}
-              className={`p-1 rounded-md transition-colors ${
+              className={`min-h-[32px] min-w-[32px] flex items-center justify-center rounded-md transition-colors ${
                 hasNextLesson ? 'hover:bg-white text-emerald-700 font-bold cursor-pointer' : 'opacity-30 text-slate-400 cursor-not-allowed'
               }`}
               title="Bài tiếp theo"
             >
-              <ChevronRight className="w-3 h-3" />
+              <ChevronRight className="w-5 h-5" />
             </button>
           </div>
         </div>
@@ -661,45 +649,38 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
       {/* ========================================================================= */}
       {/* 2. THANH CHỈ SỐ & GỢI Ý ĐỒNG BỘ 1 DÒNG (STREAMLINED METRICS RIBBON)       */}
       {/* ========================================================================= */}
-      <div className="relative bg-gradient-to-r from-sky-50/90 via-slate-50 to-amber-50/90 border border-sky-200 rounded-lg px-2 py-0.5 flex items-center justify-between gap-1.5 flex-wrap shadow-2xs">
-        {/* Chỉ số: WPM, Chính xác, Chuỗi đúng, Sao */}
-        <div className="flex items-center gap-1.5 flex-wrap text-xs font-bold text-slate-700">
-          <span className="flex items-center gap-1">
-            <span>🚀</span>
-            <span className="font-mono font-black text-sky-950 text-xs">{stats.wpm}</span>
-            <span className="text-[9px] text-slate-500 font-semibold">WPM</span>
-          </span>
-          <span className="text-slate-300">•</span>
-          <span className="flex items-center gap-1">
-            <span>🎯</span>
-            <span className="font-mono font-black text-emerald-900 text-xs">{stats.accuracy}%</span>
-          </span>
-          <span className="text-slate-300">•</span>
-          <span className="flex items-center gap-1">
+      {/* BẢNG ĐIỂM CHỮ TO: thời gian, điểm, từ đúng, chính xác, tốc độ (thay dòng chỉ số chữ nhỏ trước đây) */}
+      {scoreBoard && <ScoreBoard {...scoreBoard} compact={isCompactHeight} />}
+
+      <div className="relative bg-gradient-to-r from-sky-50/90 via-slate-50 to-amber-50/90 border border-sky-200 rounded-lg px-2 py-1 flex items-center justify-between gap-1.5 flex-wrap shadow-2xs">
+        {/* Chuỗi gõ đúng liên tiếp và số sao (giữ lại, chữ to hơn) */}
+        <div className="flex items-center gap-2 flex-wrap text-sm font-bold text-slate-700">
+          <span className="flex items-center gap-1" title="Số phím gõ đúng liên tiếp">
             <span>🔥</span>
-            <span className="font-mono font-black text-amber-900 text-xs">{stats.currentStreak}</span>
+            <span className="font-black text-amber-900 tabular-nums">{stats.currentStreak}</span>
+            <span className="text-[13px] text-slate-500 font-semibold">liên tiếp</span>
           </span>
-          <span className="text-slate-300">•</span>
-          <span className="text-amber-500 text-xs font-black">
+          <span className="text-amber-500 text-base font-black" title="Số sao đạt được">
             {'★'.repeat(stats.stars || 1)}{'☆'.repeat(Math.max(0, 3 - (stats.stars || 1)))}
           </span>
         </div>
 
         {/* Thông tin từ & phím đang gõ trực quan */}
-        <div className="flex items-center gap-1.5 flex-wrap text-xs ml-auto">
-          <div className="flex items-center gap-1 bg-white px-1.5 py-0.2 rounded border border-sky-200 shadow-2xs">
-            <span className="text-[9px] font-bold text-slate-400">Từ:</span>
-            <span className="font-black text-sky-950 font-mono text-[11px]">"{activeWordLabel}"</span>
+        {/* Gợi ý từ, phím, ngón, cách gõ Telex (giữ nguyên nội dung, chữ to 13–15px cho học sinh nhỏ) */}
+        <div className="flex items-center gap-1.5 flex-wrap text-sm ml-auto">
+          <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-lg border border-sky-200 shadow-2xs">
+            <span className="text-[13px] font-bold text-slate-500">Từ:</span>
+            <span className="font-black text-sky-950 text-[15px]">"{activeWordLabel}"</span>
           </div>
 
-          <div className="flex items-center gap-1 bg-white px-1.5 py-0.2 rounded border border-sky-200 shadow-2xs">
-            <span className="text-[9px] font-bold text-slate-400">Phím:</span>
-            <span className="font-mono font-black text-emerald-900 bg-emerald-100 px-1 py-0.2 rounded text-[11px] border border-emerald-300">
+          <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-lg border border-sky-200 shadow-2xs">
+            <span className="text-[13px] font-bold text-slate-500">Phím:</span>
+            <span className="font-black text-emerald-900 bg-emerald-100 px-1.5 rounded text-[15px] border border-emerald-300">
               {currentCharToType}
             </span>
             {activeFinger && fingerInfo && (
               <span
-                className="text-[9px] font-bold text-white px-1 py-0.2 rounded hidden sm:inline"
+                className="text-[13px] font-bold text-white px-1.5 rounded hidden sm:inline"
                 style={{ backgroundColor: fingerInfo.color }}
               >
                 {fingerInfo.shortName}
@@ -708,9 +689,9 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
           </div>
 
           {activeWordTelexScript && (
-            <div className="hidden lg:flex items-center gap-1 text-[10px] font-bold text-indigo-900 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-200">
+            <div className="hidden md:flex items-center gap-1 text-[13px] font-bold text-indigo-900 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-200">
               <span>💡 Telex:</span>
-              <span className="font-mono font-black text-indigo-600 bg-white px-1 rounded border border-indigo-300">
+              <span className="font-black text-indigo-600 bg-white px-1.5 rounded border border-indigo-300 text-[15px]">
                 {activeWordTelexScript}
               </span>
             </div>
@@ -720,7 +701,7 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
           <button
             type="button"
             onClick={handleToggleTextSize}
-            className="p-0.5 px-1.5 rounded bg-white hover:bg-slate-100 text-slate-700 text-[10px] font-black border border-slate-200 cursor-pointer transition-colors shadow-2xs"
+            className="min-h-[32px] px-2 rounded-lg bg-white hover:bg-slate-100 text-slate-700 text-[13px] font-black border border-slate-200 cursor-pointer transition-colors shadow-2xs"
             title="Đổi cỡ chữ hiển thị"
           >
             Aa ({textSize === 'normal' ? 'Nhỏ' : textSize === 'large' ? 'Vừa' : 'To'})

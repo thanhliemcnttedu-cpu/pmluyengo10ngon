@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Lesson } from '../types/typing';
 import { LESSONS } from '../data/lessons';
 import { X, CheckCircle2, Star, Sparkles, BookOpen, UserCheck, Image as ImageIcon, GraduationCap, Feather } from 'lucide-react';
@@ -53,6 +53,23 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
     initialGradeFilter ? String(initialGradeFilter) as any : 'all'
   );
 
+  // useState chỉ lấy giá trị đầu: mở lại modal với khối khác phải đồng bộ lại tab lọc
+  useEffect(() => {
+    if (isOpen) {
+      setFilterTab(initialGradeFilter && [3, 4, 5].includes(initialGradeFilter) ? (String(initialGradeFilter) as '3' | '4' | '5') : 'all');
+    }
+  }, [isOpen, initialGradeFilter]);
+
+  // Esc để đóng: thao tác quen thuộc, nhất là khi nút X bị khuất trên màn hình nhỏ
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const effectiveLessons = allLessons && allLessons.length > 0 ? allLessons : [...teacherLessons, ...LESSONS];
@@ -80,7 +97,7 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="relative w-full max-w-4xl max-h-[92vh] bg-white border-4 border-sky-400 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-800">
+      <div className="relative w-full max-w-4xl max-h-[92dvh] bg-white border-4 border-sky-400 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-800">
         {/* Header - Bright Theme */}
         <div className="flex items-center justify-between p-3.5 sm:p-5 border-b-2 border-sky-100 bg-gradient-to-r from-sky-100 via-sky-50 to-amber-50">
           <div className="flex items-center gap-3">

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Edit3, Check } from 'lucide-react';
 
 interface CustomTextModalProps {
@@ -16,6 +16,16 @@ export const CustomTextModal: React.FC<CustomTextModalProps> = ({
   const [text, setText] = useState(
     'em cham chi luyen go 10 ngon moi ngay de danh van ban nhanh nhu gio'
   );
+
+  // Esc để đóng (hook phải đặt trước return sớm)
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -47,7 +57,7 @@ export const CustomTextModal: React.FC<CustomTextModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="relative w-full max-w-xl bg-white border-4 border-amber-400 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-800">
+      <div className="relative w-full max-w-xl max-h-[92dvh] overflow-y-auto bg-white border-4 border-amber-400 rounded-3xl shadow-2xl flex flex-col text-slate-800">
         <div className="flex items-center justify-between p-4 sm:p-5 border-b-2 border-amber-100 bg-gradient-to-r from-amber-100 via-yellow-50 to-amber-50">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-2xl bg-amber-400 border-2 border-white flex items-center justify-center text-2xl shadow-md text-slate-950">

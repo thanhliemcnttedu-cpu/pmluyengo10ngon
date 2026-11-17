@@ -159,8 +159,9 @@ export const SmartViewportModal: React.FC<SmartViewportModalProps> = ({
         </div>
 
         {/* FOOTER ACTIONS */}
-        <div className="p-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+        {/* flex-wrap: khung hẹp (máy tính bảng dọc) các nút không bị tràn ra ngoài */}
+        <div className="p-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={onRefresh}

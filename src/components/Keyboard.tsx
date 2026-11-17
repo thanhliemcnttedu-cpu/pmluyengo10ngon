@@ -9,7 +9,8 @@ import {
   NUMPAD_TOP_EXTRA_KEYS,
   CODE_TO_KEY_MAP,
 } from '../data/keyboardLayout';
-import { HandsOverlay } from './HandsOverlay';
+// Bàn tay bám phím thật (phương án B) thay cho lớp bàn tay vẽ theo tọa độ cố định cũ
+import { KeyHandsOverlay } from './KeyHandsOverlay';
 import { KeyboardSkinTheme, KEYBOARD_THEMES, DEFAULT_KEYBOARD_THEME } from '../data/keyboardThemes';
 import { SymbolKeyGuideInfo } from '../utils/symbolKeyGuide';
 
@@ -21,6 +22,11 @@ interface KeyboardProps {
   isShiftTarget?: boolean;
   isBackspaceTarget?: boolean;
   isEnterTarget?: boolean;
+  /** Caps Lock đang bật nhưng cần chữ thường: hướng dẫn bấm Caps Lock để tắt */
+  isCapsOffTarget?: boolean;
+  /** Lần bấm thứ mấy của một phím phải gõ liên tiếp (Telex dd, oo, aa, ee) và tổng số lần */
+  targetPressNumber?: number;
+  targetPressTotal?: number;
   onKeyClick?: (key: KeyConfig) => void;
   handsOverlayEnabled: boolean;
   handsOpacity: number;
@@ -36,6 +42,18 @@ interface KeyboardProps {
   symbolGuideInfo?: SymbolKeyGuideInfo | null;
 }
 
+// ---- Kiểu dáng chế độ bàn tay hướng dẫn: phím phẳng sáng màu, viền chàm rõ nét, chữ đậm dễ đọc ----
+const GUIDE_FRAME_CLASS = 'bg-[#8e9bf0] border-2 border-[#5b6ad8]';
+const GUIDE_PLATE_CLASS = 'bg-[#aab5f6]';
+const GUIDE_KEYCAP_CLASS =
+  'bg-gradient-to-b from-[#f4f6ff] to-[#dfe5ff] text-slate-800 border-2 border-[#5f6fd6] shadow-[inset_0_-2px_0_rgba(79,95,201,0.18)]';
+const guideTypography = (key: KeyConfig, unit: number): string => {
+  const big = unit >= 70;
+  const mid = unit >= 46;
+  if (key.label.length === 1) return big ? 'text-xl font-semibold' : mid ? 'text-base font-semibold' : 'text-sm font-semibold';
+  return big ? 'text-base font-semibold' : mid ? 'text-sm font-semibold' : 'text-xs font-semibold';
+};
+
 export const Keyboard: React.FC<KeyboardProps> = ({
   targetKey,
   activeFinger,
@@ -44,6 +62,9 @@ export const Keyboard: React.FC<KeyboardProps> = ({
   isShiftTarget,
   isBackspaceTarget,
   isEnterTarget,
+  isCapsOffTarget = false,
+  targetPressNumber = 1,
+  targetPressTotal = 1,
   onKeyClick,
   handsOverlayEnabled,
   handsOpacity,
@@ -59,6 +80,13 @@ export const Keyboard: React.FC<KeyboardProps> = ({
   symbolGuideInfo,
 }) => {
   const activeTheme = theme || DEFAULT_KEYBOARD_THEME;
+  // CHẾ ĐỘ BÀN TAY HƯỚNG DẪN: chỉ hiện khối phím chính, phím to, phẳng, sáng màu để
+  // ngón tay mô phỏng đặt lên rõ ràng (học sinh nhìn thấy ngón nào đi tới phím nào)
+  const guideMode = handsOverlayEnabled;
+  // Phím Shift cần giữ theo quy tắc tay đối diện: phím do tay phải bấm -> Shift trái và ngược lại
+  const guideShiftCode =
+    symbolGuideInfo?.targetShiftCodes?.[0] ??
+    (targetKey?.finger?.startsWith('right') ? 'ShiftLeft' : 'ShiftRight');
   const isKeyPressed = (code: string) => pressedKeys.has(code);
 
   // Keyboard LED statuses
@@ -85,6 +113,20 @@ export const Keyboard: React.FC<KeyboardProps> = ({
       // Outer frame and plate padding (~16px total, or ~10px in compact mode)
       const framePadding = isCompactHeight ? 10 : 16;
       const availableWidth = Math.max(300, width - framePadding);
+
+      if (guideMode) {
+        // Chỉ khối phím chính (15U + 14 khe): phím rộng theo bề ngang, cao bằng ~0,78 bề rộng như phím thật nhìn từ trên
+        const vhG = window.innerHeight || 768;
+        const rectG = containerRef.current.getBoundingClientRect();
+        const topG = rectG.top > 0 ? rectG.top : 330;
+        const availH = Math.max(150, vhG - topG - (isCompactHeight ? 14 : 18));
+        const unitByW = Math.floor((availableWidth - 8 - 14 * 4) / 15);
+        const keyHByH = Math.floor((availH - 22 - 4 * 6) / 5);
+        const u = Math.max(26, Math.min(120, unitByW));
+        setUnitSize(u);
+        setKeyHeight(Math.max(26, Math.min(96, Math.round(u * 0.78), keyHByH)));
+        return;
+      }
       // Total keyboard width: 22.7 * unitSize + 76px
       const fitUnitByWidth = Math.floor((availableWidth - 76) / 22.7);
 
@@ -136,7 +178,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
       ro.disconnect();
       window.removeEventListener('resize', calculateSize);
     };
-  }, [isCompactHeight, maxUnitSize, suggestedKeyHeight]);
+  }, [isCompactHeight, maxUnitSize, suggestedKeyHeight, guideMode]);
 
   useEffect(() => {
     const handleKeyToggle = (e: KeyboardEvent) => {
@@ -156,10 +198,10 @@ export const Keyboard: React.FC<KeyboardProps> = ({
 
   // Proportional dimensional constants & Row Spacing
   // 1. Khoảng cách ngang giữa các phím trong cùng hàng (Horizontal Key Gap)
-  const gapX = 3.5;
+  const gapX = guideMode ? 4 : 3.5;
   // 2. Giãn nhẹ khoảng cách chiều dọc giữa các hàng phím (Vertical Row Gap: 5.5px)
   // Tạo sự thoáng đãng, chống dính hàng phím, giúp học sinh nhìn rõ từng hàng phím
-  const gapY = 5.5;
+  const gapY = guideMode ? 6 : 5.5;
   // 3. Khoảng cách cách biệt giữa hàng Function (F1-F12) và hàng phím số
   const fnRowBottomMargin = 8;
   // 4. Khoảng cách giữa các cụm phím chính, điều hướng và phím số
@@ -171,7 +213,9 @@ export const Keyboard: React.FC<KeyboardProps> = ({
   const mainSectionWidth = 15.0 * unitSize + 14 * gapX;
   const navSectionWidth = 3.0 * unitSize + 2 * gapX;
   const numpadSectionWidth = 4.0 * unitSize + 3 * gapX;
-  const totalKeyboardWidth = mainSectionWidth + sectionGap + navSectionWidth + sectionGap + numpadSectionWidth;
+  const totalKeyboardWidth = guideMode
+    ? mainSectionWidth
+    : mainSectionWidth + sectionGap + navSectionWidth + sectionGap + numpadSectionWidth;
 
 
   // Helper tính toán kích thước phông chữ chuẩn xác theo từng loại phím
@@ -295,7 +339,8 @@ export const Keyboard: React.FC<KeyboardProps> = ({
         targetBgColor = fingerInfo ? fingerInfo.color : '#0284c7';
       }
       // Lưu ý: CapsLock không tác dụng với ký tự đặc biệt hàng phím số nên không highlight CapsLock
-    } else if (isShiftTarget && (key.code === 'ShiftLeft' || key.code === 'ShiftRight')) {
+    } else if (isShiftTarget && (key.code === 'ShiftLeft' || key.code === 'ShiftRight') && (!guideMode || key.code === guideShiftCode)) {
+      // Chế độ hướng dẫn: chỉ tô phím Shift TAY ĐỐI DIỆN (khớp với ngón út đang giữ Shift)
       isTarget = true;
       targetLabelText = 'GIỮ SHIFT ⇧';
       targetBgColor = '#ec4899'; // Pink
@@ -303,7 +348,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
       isTarget = true;
       targetLabelText = 'HOẶC CAPS ⇪';
       targetBgColor = '#8b5cf6'; // Violet
-    } else if (!isShiftTarget && capsLockActive && key.code === 'CapsLock') {
+    } else if (isCapsOffTarget && key.code === 'CapsLock') {
       isTarget = true;
       targetLabelText = 'TẮT CAPS ⇪';
       targetBgColor = '#f43f5e'; // Rose
@@ -312,12 +357,21 @@ export const Keyboard: React.FC<KeyboardProps> = ({
       targetBgColor = fingerInfo ? fingerInfo.color : '#0284c7';
     }
 
+    // Phím phải gõ liên tiếp nhiều lần (Telex dd/oo/aa/ee): ghi rõ lần bấm
+    const isRepeatTarget = isTarget && key.code === targetKey?.code && targetPressTotal >= 2;
+    if (isRepeatTarget && !guideMode) {
+      targetLabelText = `LẦN ${targetPressNumber}/${targetPressTotal} ⬇`;
+      if (targetPressNumber >= 2) targetBgColor = '#f97316';
+    }
+
     const isWrong = wrongKeyCode === key.code;
     const isPressed = isKeyPressed(key.code);
     const isBlueCap = key.type === 'modifier';
 
     // Skin theme specific keycap classes
-    const themeKeycapClass = isBlueCap
+    const themeKeycapClass = guideMode
+      ? GUIDE_KEYCAP_CLASS
+      : isBlueCap
       ? activeTheme.modifierKeycapClass
       : activeTheme.alphaKeycapClass;
 
@@ -326,15 +380,30 @@ export const Keyboard: React.FC<KeyboardProps> = ({
       targetBgColor = fingerInfo ? fingerInfo.color : activeTheme.themeColor;
     }
 
+    // Chế độ hướng dẫn: phím cần bấm tô xanh lá, phím Shift cần giữ tô hồng (đồng bộ với viền ngón tay)
+    const guideTargetBg = isDualShiftKey || (isShiftTarget && (key.code === 'ShiftLeft' || key.code === 'ShiftRight'))
+      ? '#f9a8d4'
+      : key.code === 'CapsLock'
+      ? '#c4b5fd' // Caps Lock cần bấm để tắt chữ hoa
+      : isRepeatTarget && targetPressNumber >= 2
+      ? '#fb923c' // lần bấm thứ 2 cùng một phím: đổi sang màu cam
+      : '#34c759';
     const targetStyle = isTarget
-      ? {
-          backgroundColor: targetBgColor,
-          color: '#ffffff',
-          borderColor: '#ffffff',
-        }
+      ? guideMode
+        ? key.code === 'CapsLock' && !isCapsOffTarget
+          ? undefined // chỉ tô Caps Lock khi cần bấm để tắt chữ hoa; chữ hoa thông thường dùng Shift tay đối diện
+          : // backgroundImage: none -> bỏ lớp nền chuyển sắc của phím, nếu không màu xanh/hồng bị che mất
+            { backgroundColor: guideTargetBg, backgroundImage: 'none', color: '#0f172a', borderColor: '#4f5fc9' }
+        : {
+            backgroundColor: targetBgColor,
+            color: '#ffffff',
+            borderColor: '#ffffff',
+          }
       : undefined;
 
-    const shapeRadiusClass = activeTheme.keycapShape === 'round'
+    const shapeRadiusClass = guideMode
+      ? 'rounded-[3px]'
+      : activeTheme.keycapShape === 'round'
       ? 'rounded-full'
       : activeTheme.keycapShape === 'chiclet'
       ? 'rounded-md'
@@ -372,17 +441,20 @@ export const Keyboard: React.FC<KeyboardProps> = ({
           onKeyClick?.(key);
         }}
         style={styleObj}
+        // Lớp bàn tay đọc 2 thuộc tính này để biết tâm phím và ngón phụ trách
+        data-key-code={key.code}
+        data-finger={key.finger}
         className={`
           relative select-none ${shapeRadiusClass} flex flex-col items-center justify-center p-0.5
           font-bold text-[10px] sm:text-xs tracking-tight transition-all duration-75 cursor-pointer
-          ${isWrong ? 'key-wrong-shake' : isTarget ? 'key-target-pop' : themeKeycapClass}
+          ${isWrong ? 'key-wrong-shake' : isTarget ? (guideMode ? GUIDE_KEYCAP_CLASS : 'key-target-pop') : themeKeycapClass}
           ${isPressed && !isTarget ? 'key-pressed' : ''}
           ${isEsc ? 'ring-1 ring-black/15 font-black text-rose-300' : ''}
           ${key.code === 'CapsLock' && capsLockActive ? 'ring-2 ring-amber-400 bg-amber-950/80' : ''}
           ${key.code === 'NumLock' && numLockActive ? 'ring-2 ring-emerald-400 bg-emerald-950/80' : ''}
-          ${isDualShiftKey ? 'ring-4 ring-pink-400 shadow-[0_0_24px_rgba(236,72,153,0.95)] animate-pulse z-30' : ''}
-          ${isDualBaseKey ? 'ring-4 ring-amber-400 shadow-[0_0_24px_rgba(245,158,11,0.95)] z-30' : ''}
-          hover:scale-102 hover:brightness-105
+          ${!guideMode && isDualShiftKey ? 'ring-4 ring-pink-400 shadow-[0_0_24px_rgba(236,72,153,0.95)] animate-pulse z-30' : ''}
+          ${!guideMode && isDualBaseKey ? 'ring-4 ring-amber-400 shadow-[0_0_24px_rgba(245,158,11,0.95)] z-30' : ''}
+          ${guideMode ? '' : 'hover:scale-102 hover:brightness-105'}
         `}
         title={`Phím ${key.label}: ${fingerInfo ? fingerInfo.nameVi : ''} (${fingerInfo?.hand === 'left' ? 'Bàn tay trái' : 'Bàn tay phải'})`}
       >
@@ -415,7 +487,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
         )}
 
         {/* Animated Bouncing Pointer Arrow on Target Key */}
-        {isTarget && (
+        {isTarget && !guideMode && (
           <div className="absolute -top-7 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none animate-guide-arrow z-40 whitespace-nowrap">
             <span className={`px-2 py-0.5 rounded-full text-[9px] font-black font-sans shadow-lg transition-all ${
               isDualShiftKey
@@ -427,6 +499,20 @@ export const Keyboard: React.FC<KeyboardProps> = ({
               {targetLabelText}
             </span>
           </div>
+        )}
+
+        {guideMode && isTarget && (isRepeatTarget || (isCapsOffTarget && key.code === 'CapsLock')) && (
+          <span
+            className={`absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 py-px rounded-full text-[10px] font-black whitespace-nowrap shadow-sm z-40 ${
+              key.code === 'CapsLock'
+                ? 'bg-violet-600 text-white'
+                : targetPressNumber >= 2
+                ? 'bg-orange-600 text-white'
+                : 'bg-emerald-600 text-white'
+            }`}
+          >
+            {key.code === 'CapsLock' ? 'Tắt Caps' : `Lần ${targetPressNumber}`}
+          </span>
         )}
 
         {/* Wrong Key Badge */}
@@ -453,11 +539,15 @@ export const Keyboard: React.FC<KeyboardProps> = ({
 
         {/* Main Key Label - Tối ưu hóa kích thước chữ vừa vặn, không tràn viền */}
         <span
-          className={`font-mono-key max-w-full px-0.5 text-center truncate ${getKeyTypographyClass(
-            key,
-            customHeight
-          )} ${
-            isTarget && key.label.length === 1
+          className={`font-mono-key max-w-full px-0.5 text-center truncate ${
+            guideMode
+              ? // Viền sáng quanh chữ: chữ trên phím vẫn đọc rõ khi ngón tay ảo đè lên
+                `${guideTypography(key, unitSize)} relative z-[36] [text-shadow:0_0_2px_#fff,0_0_4px_#fff,0_0_6px_#fff]`
+              : getKeyTypographyClass(key, customHeight)
+          } ${
+            guideMode
+              ? ''
+              : isTarget && key.label.length === 1
               ? 'font-black scale-110 drop-shadow-md text-white'
               : isTarget
               ? 'font-black text-white'
@@ -478,7 +568,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
         )}
 
         {/* Finger color badge dot */}
-        {showFingerDots && fingerInfo && key.code !== 'Space' && !isTarget && !isWrong && (
+        {showFingerDots && !guideMode && fingerInfo && key.code !== 'Space' && !isTarget && !isWrong && (
           <div
             className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full border border-black/20"
             style={{ backgroundColor: fingerInfo.color }}
@@ -495,14 +585,16 @@ export const Keyboard: React.FC<KeyboardProps> = ({
       <div
         className={`w-full relative ${
           isCompactHeight ? 'p-1 sm:p-1.5 rounded-xl' : 'p-1.5 sm:p-2 rounded-2xl'
-        } shadow-lg transition-all duration-300 ${activeTheme.outerFrameClass}`}
+        } shadow-lg transition-all duration-300 ${guideMode ? GUIDE_FRAME_CLASS : activeTheme.outerFrameClass}`}
       >
         {/* Inner Switch Plate with locked real-world physical proportions - Stretches 100% full width */}
         <div
           className={`w-full relative ${
             isCompactHeight ? 'p-1 rounded-lg gap-0.5 sm:gap-1' : 'p-1.5 sm:p-2 rounded-xl gap-1 sm:gap-1.5'
-          } flex flex-col transition-all duration-300 ${activeTheme.plateClass}`}
+          } flex flex-col transition-all duration-300 ${guideMode ? GUIDE_PLATE_CLASS : activeTheme.plateClass}`}
         >
+          {!guideMode && (
+          <>
           {/* ========================================================================= */}
           {/* BẢNG ĐÈN LED CHỈ BÁO TRẠNG THÁI: NUM LOCK, CAPS LOCK, SCROLL LOCK          */}
           {/* ========================================================================= */}
@@ -618,6 +710,9 @@ export const Keyboard: React.FC<KeyboardProps> = ({
             </div>
           </div>
 
+          </>
+          )}
+
           {/* ========================================================================= */}
           {/* 2. MAIN KEYBOARD BODY (Main ANSI 15U + Nav Cluster 3U + Numpad 4U)        */}
           {/* ========================================================================= */}
@@ -642,15 +737,28 @@ export const Keyboard: React.FC<KeyboardProps> = ({
               ))}
 
               {/* Hands Overlay covering the Main ANSI section perfectly */}
-              <HandsOverlay
-                activeFinger={activeFinger}
-                pressedFinger={activeFinger}
+              <KeyHandsOverlay
+                visible={handsOverlayEnabled}
                 opacity={handsOpacity}
                 style={handsStyle}
-                visible={handsOverlayEnabled}
+                // Ký hiệu cần Shift (!, @, *...): phím gốc lấy từ bảng ký hiệu
+                targetCode={symbolGuideInfo?.baseKeyCode ?? targetKey?.code}
+                targetFinger={
+                  (symbolGuideInfo ? CODE_TO_KEY_MAP.get(symbolGuideInfo.baseKeyCode)?.finger : undefined) ??
+                  targetKey?.finger ??
+                  activeFinger
+                }
+                needShift={!!isShiftTarget || !!symbolGuideInfo}
+                shiftCodes={symbolGuideInfo?.targetShiftCodes}
+                isBackspace={isBackspaceTarget}
+                isEnter={isEnterTarget}
+                layoutKey={`${unitSize}-${keyHeight}-${activeTheme.id}`}
+                pressedKeys={pressedKeys}
               />
             </div>
 
+            {!guideMode && (
+            <>
             {/* 2. Navigation Cluster Section (3.0 U wide, true inverted-T arrows) */}
             <div
               className="flex flex-col justify-between"
@@ -725,6 +833,8 @@ export const Keyboard: React.FC<KeyboardProps> = ({
               })}
               {renderKey(CODE_TO_KEY_MAP.get('NumpadDecimal'), mainKeyHeight)}
             </div>
+            </>
+            )}
           </div>
         </div>
       </div>

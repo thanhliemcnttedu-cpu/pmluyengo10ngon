@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Bản cài đặt .exe (rất nặng) và nhật ký công cụ: không đưa lên kho
+dist_electron/
+release/
+.mesh/

@@ -120,6 +120,18 @@ export function findToneTargetIndex(chars: string[]): number {
   const v0 = chars[effectiveVowelIndices[0]].toLowerCase();
   const v1 = chars[effectiveVowelIndices[1]].toLowerCase();
 
+  // ươ, uô, iê, yê, uơ chưa có phụ âm cuối: âm chính là nguyên âm thứ 2.
+  // Cần cho trường hợp gõ dấu giữa chừng (VNI "Ngu7o72i", "d9u7o75c") và từ mở như "thuở".
+  const b0 = ACCENTED_TO_BASE_VOWEL[chars[effectiveVowelIndices[0]]]?.base.toLowerCase() ?? v0;
+  const b1 = ACCENTED_TO_BASE_VOWEL[chars[effectiveVowelIndices[1]]]?.base.toLowerCase() ?? v1;
+  if (
+    (b0 === 'ư' && b1 === 'ơ') ||
+    (b0 === 'u' && (b1 === 'ô' || b1 === 'ơ')) ||
+    ((b0 === 'i' || b0 === 'y') && b1 === 'ê')
+  ) {
+    return effectiveVowelIndices[1];
+  }
+
   // oa, oe, uy -> dấu thanh đặt ở nguyên âm thứ 2 (hòa, hoè, tuỳ, thúy)
   if ((v0 === 'o' && (v1 === 'a' || v1 === 'e')) || (v0 === 'u' && v1 === 'y')) {
     return effectiveVowelIndices[1];
@@ -140,8 +152,49 @@ export function findToneTargetIndex(chars: string[]): number {
  * Takes raw keystrokes (e.g. "sachj" or "sajch" or "tieengs" or "tieesng" or "gios" or "cuwowif" or "cuowif")
  * and outputs the composed Vietnamese word.
  */
+/**
+ * Chữ 'u' được tự đổi thành 'ư' khi gõ "uo"+"w" có thể sai với vần "uơ" (thuở, huơ).
+ * "ươ" không bao giờ đứng cuối âm tiết (luôn có i/u/phụ âm theo sau: người, hươu, được),
+ * nên nếu cặp đó nằm ở cuối từ thì trả 'ư' về 'u'. Chỉ áp dụng cho 'ư' do máy tự đổi,
+ * không đụng tới 'ư' người dùng gõ rõ (uw / u7).
+ */
+function revertTrailingAutoHorn(chars: string[], autoHornIdx: Set<number>): void {
+  autoHornIdx.forEach((j) => {
+    const next = chars[j + 1];
+    const nextBase = next ? ACCENTED_TO_BASE_VOWEL[next]?.base.toLowerCase() : undefined;
+    if (j + 1 === chars.length - 1 && nextBase === 'ơ') {
+      const info = ACCENTED_TO_BASE_VOWEL[chars[j]];
+      if (info && info.base.toLowerCase() === 'ư') {
+        const plain = info.base === 'Ư' ? 'U' : 'u';
+        chars[j] = VOWEL_TONE_TABLE[plain][info.toneIndex];
+      }
+    }
+  });
+}
+
+/** Đổi 'o'/'ó'.. thành 'ơ' giữ nguyên dấu thanh (cho kiểu gõ dấu trước móc: troifw). */
+function hornO(ch: string): string | null {
+  const info = ACCENTED_TO_BASE_VOWEL[ch];
+  if (!info) return null;
+  if (info.base === 'o') return VOWEL_TONE_TABLE['ơ'][info.toneIndex];
+  if (info.base === 'O') return VOWEL_TONE_TABLE['Ơ'][info.toneIndex];
+  if (info.base === 'ơ' || info.base === 'Ơ') return ch;
+  return null;
+}
+
+/** Đổi 'u' thành 'ư' (giữ dấu thanh); trả null nếu không phải u/ư. */
+function hornU(ch: string): string | null {
+  const info = ACCENTED_TO_BASE_VOWEL[ch];
+  if (!info) return null;
+  if (info.base === 'u') return VOWEL_TONE_TABLE['ư'][info.toneIndex];
+  if (info.base === 'U') return VOWEL_TONE_TABLE['Ư'][info.toneIndex];
+  if (info.base === 'ư' || info.base === 'Ư') return ch;
+  return null;
+}
+
 export function telexCompose(rawKeys: string): string {
   const chars: string[] = [];
+  const autoHornIdx = new Set<number>();
 
   for (let i = 0; i < rawKeys.length; i++) {
     const k = rawKeys[i];
@@ -175,30 +228,34 @@ export function telexCompose(rawKeys: string): string {
       if (chars.length >= 2) {
         const uChar = chars[chars.length - 2];
         const uLow = uChar.toLowerCase();
-        if (uLow === 'u' || uLow === 'ư') {
-          chars[chars.length - 2] = uChar === 'U' || uChar === 'Ư' ? 'Ư' : 'ư';
+        const beforeU = chars.length >= 3 ? chars[chars.length - 3].toLowerCase() : '';
+        // "qu" là phụ âm đầu: quơ giữ 'u'
+        if (uLow === 'u' && beforeU !== 'q') {
+          chars[chars.length - 2] = uChar === 'U' ? 'Ư' : 'ư';
+          autoHornIdx.add(chars.length - 2);
         }
       }
       chars[chars.length - 1] = prevChar === 'O' ? 'Ơ' : 'ơ';
       continue;
     }
-    // Hỗ trợ gõ 'cuoi' + 'w' -> 'cươi' (vần uơi/ươi: cuoiw)
+    // Hỗ trợ gõ 'cuoi' + 'w' -> 'cươi' (vần uơi/ươi: cuoiw), kể cả khi đã gõ dấu trước (troifw)
     if (kLow === 'w' && prevLow === 'i') {
       if (chars.length >= 3) {
-        const oChar = chars[chars.length - 2];
-        const uChar = chars[chars.length - 3];
-        const oLow = oChar.toLowerCase();
-        const uLow = uChar.toLowerCase();
-        if ((oLow === 'o' || oLow === 'ơ') && (uLow === 'u' || uLow === 'ư')) {
-          chars[chars.length - 3] = uChar === 'U' || uChar === 'Ư' ? 'Ư' : 'ư';
-          chars[chars.length - 2] = oChar === 'O' || oChar === 'Ơ' ? 'Ơ' : 'ơ';
+        const oNew = hornO(chars[chars.length - 2]);
+        const uNew = hornU(chars[chars.length - 3]);
+        const beforeU = chars.length >= 4 ? chars[chars.length - 4].toLowerCase() : '';
+        if (oNew && uNew && beforeU !== 'q') {
+          chars[chars.length - 3] = uNew;
+          chars[chars.length - 2] = oNew;
           continue;
         }
       }
-      if (chars.length >= 2 && chars[chars.length - 2].toLowerCase() === 'o') {
-        const oChar = chars[chars.length - 2];
-        chars[chars.length - 2] = oChar === 'O' ? 'Ơ' : 'ơ';
-        continue;
+      if (chars.length >= 2) {
+        const oNew = hornO(chars[chars.length - 2]);
+        if (oNew) {
+          chars[chars.length - 2] = oNew;
+          continue;
+        }
       }
     }
     if (prevLow === 'u' && kLow === 'w') {
@@ -226,6 +283,7 @@ export function telexCompose(rawKeys: string): string {
     chars.push(k);
   }
 
+  revertTrailingAutoHorn(chars, autoHornIdx);
   return chars.join('');
 }
 
@@ -432,6 +490,7 @@ export function checkWordTelexProgress(
  */
 export function vniCompose(rawKeys: string): string {
   const chars: string[] = [];
+  const autoHornIdx = new Set<number>();
 
   for (let i = 0; i < rawKeys.length; i++) {
     const k = rawKeys[i];
@@ -472,7 +531,11 @@ export function vniCompose(rawKeys: string): string {
         if (chars[j].toLowerCase() === 'o' && chars[j - 1].toLowerCase() === 'u') {
           const isUpU = chars[j - 1] === chars[j - 1].toUpperCase();
           const isUpO = chars[j] === chars[j].toUpperCase();
-          chars[j - 1] = isUpU ? 'Ư' : 'ư';
+          // "qu" là phụ âm đầu: quơ giữ 'u'
+          if (j < 2 || chars[j - 2].toLowerCase() !== 'q') {
+            chars[j - 1] = isUpU ? 'Ư' : 'ư';
+            autoHornIdx.add(j - 1);
+          }
           chars[j] = isUpO ? 'Ơ' : 'ơ';
           handled = true;
           break;
@@ -535,6 +598,7 @@ export function vniCompose(rawKeys: string): string {
     chars.push(k);
   }
 
+  revertTrailingAutoHorn(chars, autoHornIdx);
   return chars.join('');
 }
 

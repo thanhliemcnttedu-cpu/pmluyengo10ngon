@@ -8,7 +8,21 @@
 import defaultBookImg from '../assets/images/meo_con_di_hoc_1791667437893.jpg';
 
 export const DEFAULT_BOOK_COVER = defaultBookImg;
-export const STATIC_DEFAULT_COVER = '/images/meo_con_di_hoc.jpg';
+// Dùng BASE_URL (vite base './') thay cho '/images/...': dưới Electron file:// đường dẫn tuyệt đối trỏ về gốc ổ đĩa
+export const STATIC_DEFAULT_COVER = `${import.meta.env.BASE_URL}images/meo_con_di_hoc.jpg`;
+
+/**
+ * Chuyển đường dẫn tuyệt đối '/images/...' (thư mục public) sang dạng theo BASE_URL để chạy được cả web lẫn Electron.
+ * URL http(s)/data:/blob: giữ nguyên.
+ */
+export function resolvePublicAssetUrl(url: string | undefined | null): string {
+  const u = (url ?? '').trim();
+  if (!u) return '';
+  if (u.startsWith('/') && !u.startsWith('//')) {
+    return `${import.meta.env.BASE_URL}${u.replace(/^\/+/, '')}`;
+  }
+  return u;
+}
 
 /**
  * Tạo ảnh SVG minh họa sách giáo khoa làm fallback khi không có ảnh hoặc ảnh bị lỗi
@@ -36,7 +50,7 @@ export function createFallbackCoverSvg(title: string, gradeLevel: number = 3): s
     
     <!-- Huy hiệu lớp học -->
     <rect x="220" y="30" width="160" height="36" rx="18" fill="#f59e0b" />
-    <text x="300" y="54" fill="#1e293b" font-size="16" font-weight="900" text-anchor="middle" font-family="system-ui, sans-serif">
+    <text x="300" y="54" fill="#1e293b" font-size="16" font-weight="900" text-anchor="middle" font-family="'Be Vietnam Pro', system-ui, sans-serif">
       SÁCH GIÁO KHOA LỚP ${gradeLevel}
     </text>
 
@@ -49,17 +63,17 @@ export function createFallbackCoverSvg(title: string, gradeLevel: number = 3): s
     <text x="425" y="165" font-size="52" text-anchor="middle">✨</text>
 
     <!-- Tiêu đề bài học -->
-    <text x="300" y="235" fill="#0f172a" font-size="20" font-weight="800" text-anchor="middle" font-family="system-ui, sans-serif">
+    <text x="300" y="235" fill="#0f172a" font-size="20" font-weight="800" text-anchor="middle" font-family="'Be Vietnam Pro', system-ui, sans-serif">
       ${cleanTitle.length > 36 ? cleanTitle.slice(0, 34) + '...' : cleanTitle}
     </text>
     
-    <text x="300" y="270" fill="#475569" font-size="14" font-weight="600" text-anchor="middle" font-family="system-ui, sans-serif">
+    <text x="300" y="270" fill="#475569" font-size="14" font-weight="600" text-anchor="middle" font-family="'Be Vietnam Pro', system-ui, sans-serif">
       Chương trình Giáo Dục Phổ Thông 2018
     </text>
 
     <!-- Nút luyện gõ -->
     <rect x="200" y="300" width="200" height="34" rx="17" fill="#10b981" />
-    <text x="300" y="323" fill="#ffffff" font-size="14" font-weight="800" text-anchor="middle" font-family="system-ui, sans-serif">
+    <text x="300" y="323" fill="#ffffff" font-size="14" font-weight="800" text-anchor="middle" font-family="'Be Vietnam Pro', system-ui, sans-serif">
       ⌨️ Luyện Gõ 10 Ngón
     </text>
   </svg>

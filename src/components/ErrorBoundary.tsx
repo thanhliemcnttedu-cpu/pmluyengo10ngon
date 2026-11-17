@@ -5,6 +5,8 @@ interface Props {
   children: ReactNode;
   fallbackTitle?: string;
   onReset?: () => void;
+  // Cho phép đóng hẳn khu vực lỗi (vd: modal hỏng) thay vì chỉ thử lại rồi lỗi tiếp.
+  onClose?: () => void;
 }
 
 interface State {
@@ -31,6 +33,11 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.props.onReset) {
       this.props.onReset();
     }
+  };
+
+  private handleClose = () => {
+    this.setState({ hasError: false, error: null });
+    this.props.onClose?.();
   };
 
   private handleClearStorageAndReload = () => {
@@ -64,7 +71,7 @@ export class ErrorBoundary extends Component<Props, State> {
               </p>
             )}
           </div>
-          <div className="flex items-center justify-center gap-3 pt-2">
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
             <button
               type="button"
               onClick={this.handleReload}
@@ -82,6 +89,15 @@ export class ErrorBoundary extends Component<Props, State> {
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Khôi Phục Dữ Liệu Gốc</span>
             </button>
+            {this.props.onClose && (
+              <button
+                type="button"
+                onClick={this.handleClose}
+                className="px-4 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <span>Đóng</span>
+              </button>
+            )}
           </div>
         </div>
       );

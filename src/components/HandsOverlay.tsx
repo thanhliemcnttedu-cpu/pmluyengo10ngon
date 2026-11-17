@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { FingerId, FINGER_DATA, HandDisplayStyle, KeyConfig } from '../types/typing';
 
 export interface HandsOverlayProps {
@@ -123,8 +124,7 @@ export const HandsOverlay: React.FC<HandsOverlayProps> = ({
   visible,
   isHandsGuideTheme = false,
 }) => {
-  if (!visible) return null;
-
+  // Không return sớm ở đây: phải gọi đủ hook mỗi lần render, nếu không React báo "Rendered fewer hooks" khi tắt bàn tay.
   const isColorCoded = style === 'color_coded';
 
   // Xác định mã phím mục tiêu hiện tại
@@ -153,6 +153,8 @@ export const HandsOverlay: React.FC<HandsOverlayProps> = ({
       setMotionPhase('reaching');
     }
 
+    // Ẩn bàn tay hoặc chưa có phím đích thì không chạy vòng lặp hẹn giờ cho tốn tài nguyên.
+    if (!visible || !targetInfo) return;
     if (!isDemoLoopEnabled) return;
 
     let timer: NodeJS.Timeout;
@@ -199,7 +201,7 @@ export const HandsOverlay: React.FC<HandsOverlayProps> = ({
     return () => {
       clearTimeout(timer);
     };
-  }, [currentKeyCode, isDemoLoopEnabled, targetInfo?.dx, targetInfo?.dy]);
+  }, [currentKeyCode, isDemoLoopEnabled, visible, targetInfo?.dx, targetInfo?.dy]);
 
   // Tính toán vector dịch chuyển (deltaX, deltaY) cho từng ngón tay
   const fingerOffsets = useMemo(() => {
@@ -241,6 +243,9 @@ export const HandsOverlay: React.FC<HandsOverlayProps> = ({
   const isFingerActive = (f: FingerId) => effectiveFinger === f;
   const isFingerPressed = (f: FingerId) => pressedFinger === f || (effectiveFinger === f && motionPhase === 'pressing');
 
+  // Return sớm đặt sau toàn bộ hook để thứ tự hook luôn ổn định.
+  if (!visible) return null;
+
   return (
     <div
       className="absolute inset-0 pointer-events-none z-20 transition-opacity duration-300"
@@ -249,7 +254,8 @@ export const HandsOverlay: React.FC<HandsOverlayProps> = ({
       {/* ======================================================== */}
       {/* 1. THANH CHỈ DẪN SƯ PHẠM (PEDAGOGICAL RETURN HUD BANNER)  */}
       {/* ======================================================== */}
-      <div className="absolute top-1.5 left-1/2 -translate-x-1/2 z-30 pointer-events-auto flex items-center gap-1.5 bg-slate-950/85 backdrop-blur-md text-white px-3 py-1 rounded-full border border-sky-400 shadow-xl select-none text-[11px] font-black animate-in fade-in zoom-in-95 duration-200">
+      {/* Thanh không bắt chuột để không che hàng phím số; chỉ các nút bên trong bắt chuột. */}
+      <div className="absolute top-1.5 left-1/2 -translate-x-1/2 z-30 pointer-events-none flex items-center gap-1.5 bg-slate-950/85 backdrop-blur-md text-white px-3 py-1 rounded-full border border-sky-400 shadow-xl select-none text-[11px] font-black animate-in fade-in zoom-in-95 duration-200">
         <span className="text-amber-300 flex items-center gap-1">
           <span>👐</span>
           <span className="hidden sm:inline">HƯỚNG DẪN 10 NGÓN:</span>
@@ -291,7 +297,7 @@ export const HandsOverlay: React.FC<HandsOverlayProps> = ({
         <button
           type="button"
           onClick={() => setIsDemoLoopEnabled((prev) => !prev)}
-          className={`ml-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold cursor-pointer transition-colors border ${
+          className={`pointer-events-auto ml-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold cursor-pointer transition-colors border ${
             isDemoLoopEnabled
               ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 border-emerald-300'
               : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-600'
@@ -305,7 +311,7 @@ export const HandsOverlay: React.FC<HandsOverlayProps> = ({
         <button
           type="button"
           onClick={() => setIsAiPhotoModalOpen(true)}
-          className="ml-1 px-2.5 py-0.5 rounded-full text-[10px] font-black cursor-pointer transition-all bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 hover:from-amber-300 hover:to-orange-400 text-slate-950 border border-amber-300 shadow-sm flex items-center gap-1 active:scale-95 animate-pulse"
+          className="pointer-events-auto ml-1 px-2.5 py-0.5 rounded-full text-[10px] font-black cursor-pointer transition-all bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 hover:from-amber-300 hover:to-orange-400 text-slate-950 border border-amber-300 shadow-sm flex items-center gap-1 active:scale-95 animate-pulse"
           title="Bấm để xem ảnh mô phỏng AI đôi bàn tay thật của con người đặt chuẩn trên bàn phím"
         >
           <span>📸</span>
@@ -317,7 +323,8 @@ export const HandsOverlay: React.FC<HandsOverlayProps> = ({
       {/* ======================================================== */}
       {/* MODAL ẢNH CHỤP AI MÔ PHỎNG BÀN TAY NGƯỜI THẬT (AI PHOTO) */}
       {/* ======================================================== */}
-      {isAiPhotoModalOpen && (
+      {/* Đưa modal ra document.body: nếu nằm trong lớp có opacity thì modal bị mờ theo và z-index bị giới hạn. */}
+      {isAiPhotoModalOpen && typeof document !== 'undefined' && createPortal(
         <div className="fixed inset-0 z-50 pointer-events-auto flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-md animate-in fade-in duration-200">
           <div className="relative w-full max-w-2xl bg-white border-4 border-sky-400 rounded-3xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
             {/* Header Modal */}
@@ -395,7 +402,8 @@ export const HandsOverlay: React.FC<HandsOverlayProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ======================================================== */}

@@ -109,6 +109,21 @@ export const VIETNAMESE_CHAR_DECOMPOSITION: Record<string, { base: string; hatHo
 };
 
 /**
+ * Đánh dấu vị trí nào trong dãy phím là phím mũ/móc/dấu thật (không thêm ký tự mới khi ghép).
+ * Dùng để chỉ nới lỏng hoa/thường cho các phím này; chữ cái gốc như 'R' trong "Rùa" vẫn phải đúng hoa/thường.
+ */
+export function telexModifierPositions(seq: string[]): boolean[] {
+  const flags: boolean[] = [];
+  let prevLen = 0;
+  for (let i = 0; i < seq.length; i++) {
+    const len = telexCompose(seq.slice(0, i + 1).join('')).length;
+    flags.push(i > 0 && len === prevLen);
+    prevLen = len;
+  }
+  return flags;
+}
+
+/**
  * Phân tích một từ tiếng Việt thành danh sách tất cả các chuỗi phím Telex hợp lệ:
  * 1. Thứ tự chuẩn SGK và Unikey (dấu thanh ở cuối từ: trowif, hocj, toans, nawngs, chooir)
  * 2. Biến thể vần ơi/ơi/ôi (troiwf, troifw, chooir, choior)
@@ -177,8 +192,21 @@ export function generateValidTelexSequencesForWord(word: string): string[][] {
     rawSequences.push(endToneSeq);
   }
 
-  // 2. BIẾN THỂ GÕ CHỮ TRƯỚC, MÓC VÀ DẤU Ở CUỐI CHO VẦN "ơi", "ười", "ươi" (Ví dụ: troiwf ➜ trời, chooir ➜ chổi)
+  // 2. BIẾN THỂ GÕ CHỮ TRƯỚC, MÓC VÀ DẤU Ở CUỐI CHO VẦN "ơi", "ười", "ươi" (Ví dụ: troiwf ➜ trời)
+  // Chỉ hoãn phím móc 'w' của ơ/ư; các phím mũ/gạch khác (dd của đ, aa, ee, oo) phải giữ nguyên,
+  // nếu không dãy "doiwf" sẽ được nhận là "đời". Mỗi biến thể chỉ được thêm khi telexCompose ghép đúng từ.
   const lowerCore = coreWord.toLowerCase();
+  const pushIfComposes = (seq: string[]) => {
+    if (telexCompose(seq.join('')) === coreWord) rawSequences.push(seq);
+  };
+  const baseKeysDeferring = (deferHat: string): string[] => {
+    const seq: string[] = [];
+    charsDecomposed.forEach((c) => {
+      seq.push(c.baseChar);
+      if (c.hatHookKey && c.hatHookKey !== deferHat) seq.push(c.hatHookKey);
+    });
+    return seq;
+  };
   if (
     lowerCore.includes('ơi') ||
     lowerCore.includes('ời') ||
@@ -188,27 +216,22 @@ export function generateValidTelexSequencesForWord(word: string): string[][] {
     lowerCore.includes('ợ')
   ) {
     // 2a. troiwf (chữ trước, 'w' rồi dấu thanh)
-    const troiwfSeq: string[] = [];
-    charsDecomposed.forEach((c) => {
-      troiwfSeq.push(c.baseChar);
-    });
+    const troiwfSeq = baseKeysDeferring('w');
     troiwfSeq.push('w');
     if (foundTone) troiwfSeq.push(foundTone);
-    rawSequences.push(troiwfSeq);
+    pushIfComposes(troiwfSeq);
 
     // 2b. troifw (chữ trước, dấu thanh rồi 'w')
     if (foundTone) {
-      const troifwSeq: string[] = [];
-      charsDecomposed.forEach((c) => {
-        troifwSeq.push(c.baseChar);
-      });
+      const troifwSeq = baseKeysDeferring('w');
       troifwSeq.push(foundTone);
       troifwSeq.push('w');
-      rawSequences.push(troifwSeq);
+      pushIfComposes(troifwSeq);
     }
   }
 
-  // 2c. Biến thể cho vần "ôi", "ồi", "ối", "ổi", "ỗi", "ội" (Ví dụ: chổi -> chooir, choori)
+  // 2c. Biến thể cho vần "ôi" (hoãn phím mũ 'o'); telexCompose hiện chưa hỗ trợ kiểu này
+  // nên pushIfComposes sẽ tự loại, giữ lại để tự bật khi bộ ghép hỗ trợ.
   if (
     lowerCore.includes('ôi') ||
     lowerCore.includes('ồi') ||
@@ -218,13 +241,10 @@ export function generateValidTelexSequencesForWord(word: string): string[][] {
     lowerCore.includes('ội')
   ) {
     if (foundTone) {
-      const choiorSeq: string[] = [];
-      charsDecomposed.forEach((c) => {
-        choiorSeq.push(c.baseChar);
-      });
+      const choiorSeq = baseKeysDeferring('o');
       choiorSeq.push('o');
       choiorSeq.push(foundTone);
-      rawSequences.push(choiorSeq);
+      pushIfComposes(choiorSeq);
     }
   }
 
@@ -266,7 +286,8 @@ export function generateValidTelexSequencesForWord(word: string): string[][] {
     lowerCore.includes('ượ')
   ) {
     const uowVariant: string[] = [];
-    const baseSeq = rawSequences[0] || standardSeq;
+    // Dãy gốc phải còn đủ phím móc 'uwow' (dãy dấu-cuối nếu có, không thì dãy tuần tự)
+    const baseSeq = foundTone ? rawSequences[0] : standardSeq;
     for (const s of baseSeq) {
       uowVariant.push(s);
     }
@@ -303,22 +324,12 @@ export function generateValidTelexSequencesForWord(word: string): string[][] {
       // 1. Biến thể in hoa 100% (Caps Lock: DDAF, NAWNGX, DDIEEMR, SOOS)
       expandedRawSequences.push(seq.map((c) => c.toUpperCase()));
       // 2. Biến thể phím gốc hoa, phím dấu thường (Shift: DdAf, NAwNGx, DdIEeMr, SOos)
-      expandedRawSequences.push(
-        seq.map((c, idx) => {
-          if ('asfrxjweod'.includes(c.toLowerCase()) && idx > 0) {
-            return c.toLowerCase();
-          }
-          return c.toUpperCase();
-        })
-      );
+      // Chỉ hạ chữ thường ở vị trí là phím mũ/dấu thật, không hạ chữ cái gốc (A, E, O, D...).
+      const mods = telexModifierPositions(seq);
+      expandedRawSequences.push(seq.map((c, idx) => (mods[idx] ? c.toLowerCase() : c.toUpperCase())));
       // 3. Biến thể phím mũ hoa, phím thanh thường (DdAF, NAwNGX, DdIEeMR, SOoS)
       expandedRawSequences.push(
-        seq.map((c, idx) => {
-          if ('sfrxj'.includes(c.toLowerCase()) && idx > 0) {
-            return c.toLowerCase();
-          }
-          return c.toUpperCase();
-        })
+        seq.map((c, idx) => (mods[idx] && 'sfrxj'.includes(c.toLowerCase()) ? c.toLowerCase() : c.toUpperCase()))
       );
     }
   }
@@ -396,12 +407,12 @@ export function checkKeyInSmartTelexWord(
 } {
   const potentialKeys = newKey ? [...typedKeys, newKey] : [...typedKeys];
   const cleanTarget = targetWord.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '') || targetWord;
-  const isTargetAllUpper = cleanTarget.length > 0 && cleanTarget === cleanTarget.toUpperCase() && /[A-Z\u00C0-\u1EF9]/.test(cleanTarget);
 
   // 1. Kiểm tra trực tiếp bằng telexCompose: Nếu các phím đã ghép thành trọn vẹn từ mục tiêu
   try {
     const composed = telexCompose(potentialKeys.join(''));
-    if (composed === cleanTarget || composed.toLowerCase() === cleanTarget.toLowerCase()) {
+    // So khớp đúng hoa/thường: telexCompose đã giữ hoa/thường theo chữ gốc, phím dấu gõ hoa hay thường đều ra cùng kết quả
+    if (composed === cleanTarget) {
       // NẾU TỪ CÓ DẤU CÂU HẬU TỐ (ví dụ "bi," hay "ke," hay "thơ."):
       // Kiểm tra xem đã gõ ký tự dấu câu đó chưa. Nếu chưa gõ -> Bắt buộc gõ dấu câu tiếp theo!
       const suffixPunct = targetWord.slice(cleanTarget.length);
@@ -435,16 +446,14 @@ export function checkKeyInSmartTelexWord(
   // 2. Tìm các dãy có tiền tố trùng khớp với potentialKeys
   const matchingSequences = validSequences.filter((seq) => {
     if (seq.length < potentialKeys.length) return false;
+    const mods = telexModifierPositions(seq);
     for (let i = 0; i < potentialKeys.length; i++) {
       const p = potentialKeys[i];
       const s = seq[i];
-      
-      // Xử lý linh hoạt chữ hoa / chữ thường cho tiếng Việt:
-      // Các phím tạo dấu/mũ/móc (a, e, o, d, w, s, f, r, x, j) hoặc trong từ in hoa toàn bộ:
-      // Học sinh có thể gõ HOA hoặc THƯỜNG đều hợp lệ!
-      const isModifierKey = 'asfrxjweod'.includes(s.toLowerCase());
 
-      if (isModifierKey || isTargetAllUpper) {
+      // Chỉ nới lỏng hoa/thường cho phím mũ/móc/dấu thật (vị trí không sinh chữ mới).
+      // Trước đây mọi chữ a/e/o/d/r/s... đều được nới, nên 'r' lọt qua cho chữ 'R' đầu "Rùa".
+      if (mods[i]) {
         if (p.toLowerCase() !== s.toLowerCase()) return false;
       } else {
         const sUpper = s.toLowerCase() !== s && s.toUpperCase() === s;
@@ -514,19 +523,8 @@ export function checkKeyInSmartTelexWord(
       };
     }
 
-    // Kiểm tra không phân biệt hoa thường nếu từ mục tiêu in hoa
-    if (isTargetAllUpper) {
-      if (cleanTarget.toLowerCase().startsWith(composed.toLowerCase()) || baseTargetNoTone.toLowerCase().startsWith(composed.toLowerCase())) {
-        return {
-          isValid: true,
-          isWordCompleted: false,
-          nextAcceptableKeys: [],
-          recommendedNextKey: null,
-          activeSequence: null,
-          hintExplanationVi: `Bé đang gõ đúng từ "${targetWord}"!`,
-        };
-      }
-    }
+    // Đã bỏ nhánh so khớp không phân biệt hoa/thường cho từ in hoa:
+    // chữ cái gốc phải đúng hoa (vd "nẵng" gõ thường không hợp lệ cho "NẴNG").
   } catch {
     // Ignore fallback errors
   }
@@ -651,7 +649,20 @@ export function matchUnikeyInputInWord(
     };
   }
 
-  if (lowerInput.length >= 2 && cleanTarget.endsWith(lowerInput)) {
+  // Phần chữ còn lại của từ tính từ bước hiện tại (bỏ bước dấu thanh vì nó trỏ về chữ đã gõ, bỏ dấu câu).
+  // So với phần còn lại thay vì endsWith cả từ: "ng" gửi lúc đang ở chữ 'h' của "chang" không được nhảy tới cuối.
+  const remainingCharByIndex = new Map<number, string>();
+  for (const s of remainingSteps.slice(0, maxAdvanceBeforePunct)) {
+    if (!s.isToneMarkKey && !remainingCharByIndex.has(s.charIndex)) {
+      remainingCharByIndex.set(s.charIndex, s.targetChar);
+    }
+  }
+  const remainingText = [...remainingCharByIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, ch]) => ch)
+    .join('');
+
+  if (lowerInput.length >= 2 && inputKeyOrStr === remainingText) {
     const advance = Math.min(remainingSteps.length, maxAdvanceBeforePunct);
     return {
       isMatch: true,
@@ -663,9 +674,10 @@ export function matchUnikeyInputInWord(
 
   // 3. Ký tự tiếng Việt có dấu do Unikey ghép (ví dụ 'ơ', 'ờ', 'ắ', 'á', 'đ', 'ê', 'ô'...)
   if (isVietnameseAccented(lowerInput)) {
-    // 3a. Khớp với targetChar của bước hiện tại hoặc các bước tiếp theo trong từ
+    // 3a. Khớp với targetChar của CHÍNH chữ đang gõ (cùng charIndex với bước hiện tại).
+    // Không tìm sang chữ phía sau, tránh nhảy cóc qua các chữ chưa gõ (vd 'à' khi đang ở 'h' của "chàng").
     const matchStepIdx = remainingSteps.findIndex(
-      (s) => s.targetChar.toLowerCase() === lowerInput
+      (s) => s.charIndex === currentStep.charIndex && s.targetChar.toLowerCase() === lowerInput
     );
     if (matchStepIdx !== -1) {
       const targetChar = remainingSteps[matchStepIdx].targetChar;
@@ -722,8 +734,13 @@ export function matchUnikeyInputInWord(
         };
       }
 
-      if (decomp.tone && (expectedLower === decomp.tone || cleanTarget.includes(lowerInput))) {
-        const toneStepIdx = remainingSteps.findIndex((s) => s.isToneMarkKey);
+      // Chỉ nhận chữ có dấu thay cho phím dấu thanh khi mọi chữ cái gốc trước bước dấu đã gõ xong,
+      // nếu không sẽ bỏ qua các chữ chưa gõ (trước đây dùng cleanTarget.includes nên nhảy cóc).
+      const toneStepIdx = remainingSteps.findIndex((s) => s.isToneMarkKey);
+      const baseLettersBeforeTone = remainingSteps
+        .slice(0, toneStepIdx === -1 ? remainingSteps.length : toneStepIdx)
+        .some((s) => !s.isToneMarkKey && !s.isHatHookKey);
+      if (decomp.tone && (expectedLower === decomp.tone || !baseLettersBeforeTone) && cleanTarget.includes(lowerInput)) {
         const advance = toneStepIdx !== -1 ? toneStepIdx + 1 : remainingSteps.length;
         return {
           isMatch: true,

@@ -44,7 +44,10 @@ export async function fetchLessonsFromSupabase(): Promise<Lesson[] | null> {
     const { data, error } = await supabase
       .from('lessons')
       .select('*')
-      .order('grade_level', { ascending: true });
+      // Sắp thêm theo level rồi id để thứ tự bài ổn định giữa các lần tải (Postgres không bảo đảm thứ tự khi trùng khối)
+      .order('grade_level', { ascending: true })
+      .order('level', { ascending: true })
+      .order('id', { ascending: true });
 
     if (error) {
       console.warn('Lỗi khi đọc bảng lessons từ Supabase:', error.message);

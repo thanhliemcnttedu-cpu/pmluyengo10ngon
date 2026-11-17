@@ -122,14 +122,14 @@
     </g>
 
     <!-- Home Row Keycap Letters -->
-    <text x="-104" y="23" font-family="'Nunito', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">A</text>
-    <text x="-82" y="23" font-family="'Nunito', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">S</text>
-    <text x="-60" y="23" font-family="'Nunito', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">D</text>
-    <text x="-38" y="23" font-family="'Nunito', sans-serif" font-size="10" font-weight="900" fill="#ffffff" text-anchor="middle">F</text>
-    <text x="28" y="23" font-family="'Nunito', sans-serif" font-size="10" font-weight="900" fill="#ffffff" text-anchor="middle">J</text>
-    <text x="50" y="23" font-family="'Nunito', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">K</text>
-    <text x="72" y="23" font-family="'Nunito', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">L</text>
-    <text x="94" y="23" font-family="'Nunito', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">;</text>
+    <text x="-104" y="23" font-family="'Be Vietnam Pro', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">A</text>
+    <text x="-82" y="23" font-family="'Be Vietnam Pro', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">S</text>
+    <text x="-60" y="23" font-family="'Be Vietnam Pro', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">D</text>
+    <text x="-38" y="23" font-family="'Be Vietnam Pro', sans-serif" font-size="10" font-weight="900" fill="#ffffff" text-anchor="middle">F</text>
+    <text x="28" y="23" font-family="'Be Vietnam Pro', sans-serif" font-size="10" font-weight="900" fill="#ffffff" text-anchor="middle">J</text>
+    <text x="50" y="23" font-family="'Be Vietnam Pro', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">K</text>
+    <text x="72" y="23" font-family="'Be Vietnam Pro', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">L</text>
+    <text x="94" y="23" font-family="'Be Vietnam Pro', sans-serif" font-size="9" font-weight="900" fill="#ffffff" text-anchor="middle">;</text>
 
     <!-- Speed Action Streaks -->
     <line x1="-185" y1="0" x2="-165" y2="0" stroke="#0284c7" stroke-width="4" stroke-linecap="round" />
@@ -185,10 +185,10 @@
 
   <!-- ================= TYPOGRAPHY ================= -->
   <!-- "LUYỆN GÕ" -->
-  <text x="250" y="295" font-family="'Nunito', 'Arial Black', sans-serif" font-size="46" font-weight="900" fill="#0284c7" text-anchor="middle" letter-spacing="1">LUYỆN GÕ</text>
+  <text x="250" y="295" font-family="'Be Vietnam Pro', 'Arial Black', sans-serif" font-size="46" font-weight="900" fill="#0284c7" text-anchor="middle" letter-spacing="1">LUYỆN GÕ</text>
 
   <!-- "BÀN PHÍM" -->
-  <text x="250" y="348" font-family="'Nunito', 'Arial Black', sans-serif" font-size="52" font-weight="900" fill="#0369a1" text-anchor="middle" letter-spacing="2">BÀN PHÍM</text>
+  <text x="250" y="348" font-family="'Be Vietnam Pro', 'Arial Black', sans-serif" font-size="52" font-weight="900" fill="#0369a1" text-anchor="middle" letter-spacing="2">BÀN PHÍM</text>
 
   <!-- "10 NGÓN" with Speed Lines -->
   <g transform="translate(250, 405)">
@@ -198,9 +198,9 @@
     <line x1="-140" y1="12" x2="-105" y2="12" stroke="#ea580c" stroke-width="5" stroke-linecap="round" />
 
     <!-- 10 NGÓN in bright orange gradient -->
-    <text x="-10" y="5" font-family="'Nunito', 'Arial Black', sans-serif" font-size="64" font-weight="900" fill="url(#orangeSwoosh)" text-anchor="middle" font-style="italic">10 NGÓN</text>
+    <text x="-10" y="5" font-family="'Be Vietnam Pro', 'Arial Black', sans-serif" font-size="64" font-weight="900" fill="url(#orangeSwoosh)" text-anchor="middle" font-style="italic">10 NGÓN</text>
   </g>
 
   <!-- "NHANH & CHÍNH XÁC" -->
-  <text x="250" y="445" font-family="'Nunito', sans-serif" font-size="19" font-weight="900" fill="#0f172a" text-anchor="middle" letter-spacing="3.5">NHANH &amp; CHÍNH XÁC</text>
+  <text x="250" y="445" font-family="'Be Vietnam Pro', sans-serif" font-size="19" font-weight="900" fill="#0f172a" text-anchor="middle" letter-spacing="3.5">NHANH &amp; CHÍNH XÁC</text>
 </svg>

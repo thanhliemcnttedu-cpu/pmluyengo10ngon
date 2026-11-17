@@ -215,7 +215,7 @@ export const NUMBER_ROW_SYMBOLS_MAP: Record<string, { digit: string; code: strin
   '^': { digit: '6', code: 'Digit6', fingerDesc: 'ngón trỏ tay phải', keyLabel: '6 (^)' },
   '&': { digit: '7', code: 'Digit7', fingerDesc: 'ngón trỏ tay phải', keyLabel: '7 (&)' },
   '*': { digit: '8', code: 'Digit8', fingerDesc: 'ngón giữa tay phải', keyLabel: '8 (*)' },
-  '(': { digit: '9', code: 'Digit9', fingerDesc: 'ngón áp út tay phải', keyLabel: '9 (() ' },
+  '(': { digit: '9', code: 'Digit9', fingerDesc: 'ngón áp út tay phải', keyLabel: '9 (()' },
   ')': { digit: '0', code: 'Digit0', fingerDesc: 'ngón út tay phải', keyLabel: '0 ())' },
 };
 
@@ -244,7 +244,14 @@ export function charToKeyCode(char: string): string {
   if (char === '=') return 'Equal';
   if (char === '+') return 'Equal';
   if (char === '"' || char === "'") return 'Quote';
-  return 'Key' + char.toUpperCase();
+  if (char === '[' || char === '{') return 'BracketLeft';
+  if (char === ']' || char === '}') return 'BracketRight';
+  if (char === '\\' || char === '|') return 'Backslash';
+  if (char === '`' || char === '~') return 'Backquote';
+  if (char === '\t') return 'Tab';
+  // Ký tự không có trên bàn phím (“ ” … — chữ ngoại lai): trả '' để nơi gọi bỏ qua tô sáng,
+  // thay vì sinh mã giả kiểu 'Key“' làm bàn phím ảo không tìm thấy phím.
+  return '';
 }
 
 /**
@@ -301,14 +308,12 @@ export function evaluateCaseMistake(
   // ĐẶC BIỆT: Phím gõ dấu tiếng Việt (mũ/móc/dấu thanh lặp: s, f, r, x, j, w, d, a, e, o)
   // Khi người dùng gõ từ in hoa (như ĐÀ NẴNG, ĐIỂM SỐ), bé có thể gõ phím dấu dạng HOA hoặc THƯỜNG:
   // DDAF hay DdAF hay DdAf, NAWNGX hay NAwNGX hay NAwNGx, DDIEEMR hay DdIEeMR hay DDIEEMr, SOOS hay SOoS hay SOos...
-  const isVietnameseModifierKey = 'asfrxjweod'.includes(expectedKeyChar.toLowerCase());
-  const isModifierStep = options?.isAuxiliaryKey || options?.isHatHookKey || options?.isToneMarkKey || isVietnameseModifierKey;
+  // Chỉ coi là phím bổ trợ khi bước đó THẬT SỰ là phím mũ/móc/dấu thanh (do bộ phân rã đánh dấu).
+  // Không dựa vào chữ cái (a, s, r, d...) vì chữ 'R' đầu "Rùa" là chữ gốc, gõ 'r' phải báo sai hoa/thường.
+  const isModifierStep = !!(options?.isAuxiliaryKey || options?.isHatHookKey || options?.isToneMarkKey);
 
-  if (isCharSameIgnoringCase) {
-    // Nếu là phím bổ trợ dấu hoặc từ mục tiêu là từ in hoa toàn bộ: Chấp nhận cả chữ hoa và chữ thường!
-    if (isModifierStep || options?.isWordAllUpper) {
-      return { isCaseMismatch: false, mistakeType: null, title: '', detail: '' };
-    }
+  if (isCharSameIgnoringCase && isModifierStep) {
+    return { isCaseMismatch: false, mistakeType: null, title: '', detail: '' };
   }
 
   const expectedIsUpper = isUpperCaseChar(expectedKeyChar);
@@ -505,10 +510,12 @@ export function convertWordToTelexSteps(word: string, wordStartIndex: number): W
   // Thêm các phím chữ cái cơ sở và mũ/móc
   components.forEach((comp) => {
     const isLetterUpper = comp.isUpper || isUpperCaseChar(comp.baseChar);
+    // Ký hiệu nằm giữa từ (a@b, 100+200, 3*4) cũng cần Shift như khi đứng ở đầu/cuối từ
+    const isShiftedSymbol = !!getSymbolKeyGuideInfo(comp.baseChar);
     steps.push({
       keyChar: comp.baseChar,
       code: charToKeyCode(comp.baseChar),
-      isShiftRequired: isLetterUpper,
+      isShiftRequired: isLetterUpper || isShiftedSymbol,
       targetChar: comp.targetChar,
       charIndex: comp.charIndex,
       subStepIndex: currentSubStep++,

@@ -40,14 +40,16 @@ export type GameTypingMode = 'accented' | 'unaccented'; // 'accented' = Tiếng 
 
 // ----------------------------------------------------------------------------
 // CHUẨN HÓA THỜI GIAN ĐẾM NGƯỢC THEO TỪNG LEVEL (MỖI LƯỢT GÕ)
-// Level 1: 50 giây | Level 2: 40 giây | Level 3: 35 giây | Level 4: 30 giây | Level 5: 25 giây
+// Theo yêu cầu tác giả: mỗi Level được thêm 60 giây so với mốc cũ (50/40/35/30/25 giây)
+// Level 1: 110 giây | Level 2: 100 giây | Level 3: 95 giây | Level 4: 90 giây | Level 5: 85 giây
 // ----------------------------------------------------------------------------
+export const LEVEL_TIME_BONUS_SEC = 60;
 export const LEVEL_TIME_LIMITS: Record<number, number> = {
-  1: 50, // 50 giây
-  2: 40, // 40 giây
-  3: 35, // 35 giây
-  4: 30, // 30 giây
-  5: 25, // 25 giây
+  1: 50 + LEVEL_TIME_BONUS_SEC, // 110 giây
+  2: 40 + LEVEL_TIME_BONUS_SEC, // 100 giây
+  3: 35 + LEVEL_TIME_BONUS_SEC, // 95 giây
+  4: 30 + LEVEL_TIME_BONUS_SEC, // 90 giây
+  5: 25 + LEVEL_TIME_BONUS_SEC, // 85 giây
 };
 
 // ============================================================================
@@ -55,7 +57,7 @@ export const LEVEL_TIME_LIMITS: Record<number, number> = {
 // ============================================================================
 export const VIETNAMESE_ACCENTED_WORDS: Record<number, GameWordItem[]> = {
   // --------------------------------------------------------------------------
-  // LEVEL 1: Từ đơn / từ 1 tiếng (1 syllable/word) - Thời gian 50 giây/lượt
+  // LEVEL 1: Từ đơn / từ 1 tiếng (1 syllable/word) - Thời gian 110 giây/lượt
   // --------------------------------------------------------------------------
   1: [
     // Đồ dùng học tập & Sự vật
@@ -172,7 +174,7 @@ export const VIETNAMESE_ACCENTED_WORDS: Record<number, GameWordItem[]> = {
   ],
 
   // --------------------------------------------------------------------------
-  // LEVEL 2: Cụm từ gồm 2 đến 3 từ (2 - 3 words) - Thời gian 40 giây/lượt
+  // LEVEL 2: Cụm từ gồm 2 đến 3 từ (2 - 3 words) - Thời gian 100 giây/lượt
   // --------------------------------------------------------------------------
   2: [
     // Máy tính
@@ -261,7 +263,7 @@ export const VIETNAMESE_ACCENTED_WORDS: Record<number, GameWordItem[]> = {
   ],
 
   // --------------------------------------------------------------------------
-  // LEVEL 3: Câu có độ dài từ 4 đến 6 từ (4 - 6 words) - Thời gian 35 giây/lượt
+  // LEVEL 3: Câu có độ dài từ 4 đến 6 từ (4 - 6 words) - Thời gian 95 giây/lượt
   // --------------------------------------------------------------------------
   3: [
     // Máy tính
@@ -341,7 +343,7 @@ export const VIETNAMESE_ACCENTED_WORDS: Record<number, GameWordItem[]> = {
   ],
 
   // --------------------------------------------------------------------------
-  // LEVEL 4: Câu có độ dài từ 4 đến 7 từ (4 - 7 words) - Thời gian 30 giây/lượt
+  // LEVEL 4: Câu có độ dài từ 4 đến 7 từ (4 - 7 words) - Thời gian 90 giây/lượt
   // --------------------------------------------------------------------------
   4: [
     // Máy tính
@@ -404,7 +406,7 @@ export const VIETNAMESE_ACCENTED_WORDS: Record<number, GameWordItem[]> = {
   ],
 
   // --------------------------------------------------------------------------
-  // LEVEL 5: Câu có độ dài linh hoạt 3 đến 8 từ - Phản xạ cao - Thời gian 25 giây/lượt
+  // LEVEL 5: Câu có độ dài linh hoạt 3 đến 8 từ - Phản xạ cao - Thời gian 85 giây/lượt
   // --------------------------------------------------------------------------
   5: [
     // Máy tính & Công nghệ

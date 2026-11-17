@@ -39,10 +39,78 @@ import { compressImageFile } from '../utils/imageUtils';
 import { uploadImageToSupabaseStorage, bulkUpsertLessonsToSupabase } from '../lib/supabase';
 import { LESSONS } from '../data/lessons';
 
+// Callback có thể trả false (hoặc Promise<false>) để báo lưu thất bại; void vẫn hợp lệ cho App cũ
+type MaybeResult = void | boolean | Promise<void | boolean>;
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+// Tên giáo viên điền sẵn ở ô "Tên Thầy / Cô" (theo yêu cầu tác giả)
+const DEFAULT_TEACHER_NAME = 'Thầy Liêm';
+const GEMINI_KEY_STORAGE = 'typing_kids_gemini_key';
+const GEMINI_KEY_PAGE = 'https://aistudio.google.com/apikey';
+// Khoá Gemini có 2 dạng: cũ "AIza…" (~39 ký tự) và mới "AQ.…" (có dấu chấm, dài hơn).
+// Chỉ kiểm tra thô để bắt lỗi dán thiếu/thừa hoặc dính dấu cách
+const looksLikeGeminiKey = (k: string) => /^[A-Za-z0-9._-]{30,200}$/.test(k.trim());
+
+// Chuẩn hoá 1 bài nhập từ USB: thiếu id/text thì bỏ, thiếu trường phụ thì điền mặc định
+const normalizeImportedLesson = (raw: unknown): Lesson | null => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, any>;
+  if (typeof r.id !== 'string' || !r.id.trim() || typeof r.text !== 'string' || !r.text.trim()) return null;
+  const grade = [3, 4, 5].includes(Number(r.gradeLevel)) ? Number(r.gradeLevel) : undefined;
+  const validCategories: Lesson['category'][] = [
+    'home_row', 'top_row', 'bottom_row', 'number_row', 'numpad_tenkey',
+    'animals', 'events_school', 'short_sentences', 'poems_stories',
+  ];
+  return {
+    ...(r as Lesson),
+    id: r.id.trim(),
+    text: r.text,
+    title: typeof r.title === 'string' && r.title.trim() ? r.title : 'Bài học chưa đặt tên',
+    subtitle: typeof r.subtitle === 'string' ? r.subtitle : '',
+    descriptionVi: typeof r.descriptionVi === 'string' ? r.descriptionVi : '',
+    categoryTitleVi: typeof r.categoryTitleVi === 'string' && r.categoryTitleVi ? r.categoryTitleVi : 'Luyện gõ',
+    category: validCategories.includes(r.category) ? r.category : 'short_sentences',
+    level: Number.isFinite(Number(r.level)) && Number(r.level) > 0 ? Number(r.level) : 1,
+    targetWpm: Number.isFinite(Number(r.targetWpm)) && Number(r.targetWpm) > 0 ? Number(r.targetWpm) : 18,
+    targetAccuracy:
+      Number.isFinite(Number(r.targetAccuracy)) && Number(r.targetAccuracy) > 0 && Number(r.targetAccuracy) <= 100
+        ? Number(r.targetAccuracy)
+        : 90,
+    focusKeys: Array.isArray(r.focusKeys) ? r.focusKeys.filter((k: unknown) => typeof k === 'string') : [],
+    badgeName: typeof r.badgeName === 'string' && r.badgeName ? r.badgeName : 'Học Trò Xuất Sắc',
+    gradeLevel: grade,
+  };
+};
+
+// Chuẩn hoá giao bài nhập từ USB: chỉ giữ khối 3/4/5 có danh sách id dạng chuỗi
+const normalizeImportedAssignments = (raw: unknown): Record<number, GradeAssignment> | undefined => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<number, GradeAssignment> = {};
+  Object.entries(raw as Record<string, any>).forEach(([k, g]) => {
+    const grade = Number(k);
+    if (![3, 4, 5].includes(grade) || !g || typeof g !== 'object') return;
+    const ids: string[] = Array.isArray(g.lessonIds)
+      ? g.lessonIds.filter((x: unknown): x is string => typeof x === 'string' && !!x)
+      : typeof g.lessonId === 'string' && g.lessonId
+      ? [g.lessonId]
+      : [];
+    if (ids.length === 0) return;
+    out[grade] = {
+      gradeLevel: grade,
+      lessonId: ids[0],
+      lessonIds: ids,
+      assignedAt: typeof g.assignedAt === 'string' ? g.assignedAt : new Date().toISOString(),
+      teacherName: typeof g.teacherName === 'string' ? g.teacherName : 'Giáo viên',
+      teacherNote: typeof g.teacherNote === 'string' ? g.teacherNote : undefined,
+    };
+  });
+  return Object.keys(out).length > 0 ? out : undefined;
+};
+
 interface TeacherLessonModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSaveLesson: (updatedLesson: Lesson) => void;
+  onSaveLesson: (updatedLesson: Lesson) => MaybeResult;
   allLessons?: Lesson[];
   teacherLessons?: Lesson[];
   onDeleteLesson: (id: string) => void;
@@ -54,7 +122,7 @@ interface TeacherLessonModalProps {
     lessonIds: string[],
     teacherName: string,
     teacherNote: string
-  ) => void;
+  ) => MaybeResult;
   onImportLessons?: (
     importedLessons: Lesson[],
     importedAssignments?: Record<number, GradeAssignment>
@@ -92,29 +160,41 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   // Thông tin bài vừa được lưu thành công trên máy chủ
   const [lastSavedLesson, setLastSavedLesson] = useState<Lesson | null>(null);
 
-  // Active Tab:
-  // - 'manage': Danh sách & Sắp xếp phân cấp tất cả bài học
-  // - 'poems_sgk': Chuyên đề luyện gõ các bài thơ, văn theo SGK
-  // - 'editor': Soạn thảo, chỉnh sửa & Phân tích ảnh AI OCR
+  // Mục đang mở ở menu trái:
+  // - 'manage': Danh sách bài học (lọc theo lớp / đang giao / thơ & văn SGK)
+  // - 'editor': Soạn bài & phân tích ảnh SGK bằng AI
   // - 'assign': Giao 1 hoặc nhiều bài cho khối lớp
-  const [activeTab, setActiveTab] = useState<'manage' | 'poems_sgk' | 'editor' | 'assign'>('manage');
+  // - 'backup': Sao lưu USB & đồng bộ Supabase
+  const [activeTab, setActiveTab] = useState<'manage' | 'editor' | 'assign' | 'backup'>('manage');
+  // Dòng bài học đang mở phần xem trước
+  const [previewLessonId, setPreviewLessonId] = useState<string | null>(null);
+  // Máy chủ đã có sẵn khoá Gemini trong .env chưa (null = đang hỏi)
+  const [aiReady, setAiReady] = useState<boolean | null>(null);
+  // Khoá Gemini giáo viên tự nhập (khi máy chủ chưa có). Chỉ lưu trên máy này nếu cô chọn "Nhớ khoá"
+  const [geminiKey, setGeminiKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem(GEMINI_KEY_STORAGE) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [showKeyDialog, setShowKeyDialog] = useState<boolean>(false);
+  const [keyDraft, setKeyDraft] = useState<string>('');
+  const [rememberKey, setRememberKey] = useState<boolean>(true);
+  const [keyDialogError, setKeyDialogError] = useState<string>('');
+  const [pasteHint, setPasteHint] = useState<string>('');
+  const contentTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Bộ lọc & sắp xếp phân cấp ở tab 'manage'
   const [gradeFilter, setGradeFilter] = useState<number | 'all' | 'assigned' | 'poems'>('all');
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   const [sortBy, setSortBy] = useState<'hierarchy' | 'assigned_first' | 'poems_first' | 'title_az' | 'wpm_asc'>('hierarchy');
-  const [viewMode, setViewMode] = useState<'grouped' | 'grid'>('grouped');
-
-  // Bộ lọc ở tab chuyên đề 'poems_sgk'
-  const [poemGenreFilter, setPoemGenreFilter] = useState<'all' | 'poem' | 'prose' | 'assigned' | 'free'>('all');
-  const [poemGradeFilter, setPoemGradeFilter] = useState<number | 'all'>('all');
-  const [poemSearchKeyword, setPoemSearchKeyword] = useState<string>('');
 
   // Editor states
   const [editingLessonId, setEditingLessonId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [gradeLevel, setGradeLevel] = useState<number>(3);
-  const [teacherName, setTeacherName] = useState('Cô Mai');
+  const [teacherName, setTeacherName] = useState(DEFAULT_TEACHER_NAME);
   const [text, setText] = useState('');
   const [teacherNote, setTeacherNote] = useState('Các con nhớ giữ phím Shift để viết hoa đầu câu và gõ đúng dấu nhé!');
   const [imageUrl, setImageUrl] = useState('');
@@ -136,10 +216,13 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const [showSaveToast, setShowSaveToast] = useState<boolean>(false);
   const [isToastFading, setIsToastFading] = useState<boolean>(false);
   const [isSavingLesson, setIsSavingLesson] = useState<boolean>(false);
+  // Khác rỗng = toast hiển thị lỗi thay vì báo thành công
+  const [saveToastError, setSaveToastError] = useState<string>('');
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
   const toastFadeTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const triggerSaveToast = () => {
+  const triggerSaveToast = (errorMsg = '') => {
+    setSaveToastError(errorMsg);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     if (toastFadeTimerRef.current) clearTimeout(toastFadeTimerRef.current);
 
@@ -258,7 +341,8 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     setEditingLessonId(lesson.id || null);
     setTitle(lesson.title || '');
     setGradeLevel(lesson.gradeLevel || 3);
-    setTeacherName(lesson.authorTeacher || 'Cô Mai');
+    // Luôn điền tên mặc định: người đang sửa bài là giáo viên đứng tên
+    setTeacherName(DEFAULT_TEACHER_NAME);
     setText(lesson.text || '');
     setTeacherNote(lesson.teacherNote || lesson.descriptionVi || '');
     setImageUrl(lesson.imageUrl || '');
@@ -278,6 +362,19 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
       setActiveTab('editor');
     }
   }, [initialEditingLesson, isOpen]);
+
+  // Hỏi trước máy chủ có khoá Gemini chưa để báo ngay, không bắt cô chờ bấm rồi mới thấy lỗi
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'editor' || aiReady !== null) return;
+    let alive = true;
+    fetch('/api/ai-status')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => alive && setAiReady(d ? !!d.ocrReady : null))
+      .catch(() => alive && setAiReady(null));
+    return () => {
+      alive = false;
+    };
+  }, [isOpen, activeTab, aiReady]);
 
   // Handle Login with username & password (admin / Tanuyen@2026)
   const handleLogin = (e: React.FormEvent) => {
@@ -316,7 +413,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     setEditingLessonId(null);
     setTitle('');
     setGradeLevel(3);
-    setTeacherName('Cô Mai');
+    setTeacherName(DEFAULT_TEACHER_NAME);
     setText('');
     setTeacherNote(
       asPoemOrProse
@@ -336,16 +433,31 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
 
   // Handle image upload from computer (FileReader with Auto Compression)
   const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setIsCompressingImage(true);
-      try {
-        const compressedBase64 = await compressImageFile(file, 1000, 1000, 0.82);
-        setImageUrl(compressedBase64);
-        setOcrSuccessMsg('✅ Đã nén và tối ưu hóa ảnh sách giáo khoa thành công! Sẵn sàng phân tích AI hoặc lưu trữ.');
-        setOcrErrorMsg('');
-      } catch (err: any) {
-        console.warn('Lỗi nén ảnh, sử dụng FileReader thông thường:', err);
+    const input = e.target;
+    const file = input.files?.[0];
+    // Reset để chọn lại cùng một file vẫn kích hoạt onChange
+    input.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setOcrSuccessMsg('');
+      setOcrErrorMsg('❌ File đã chọn không phải là hình ảnh. Cô chọn ảnh JPG/PNG/WebP nhé.');
+      return;
+    }
+    setIsCompressingImage(true);
+    try {
+      const compressedBase64 = await compressImageFile(file, 1000, 1000, 0.82);
+      setImageUrl(compressedBase64);
+      setOcrSuccessMsg('✅ Đã nén và tối ưu hóa ảnh sách giáo khoa thành công! Sẵn sàng phân tích AI hoặc lưu trữ.');
+      setOcrErrorMsg('');
+    } catch (err: any) {
+      console.warn('Lỗi nén ảnh:', err);
+      // Không nén được mà file quá lớn thì không lưu base64 khổng lồ (làm nặng localStorage/CSDL)
+      if (file.size > MAX_IMAGE_BYTES) {
+        setOcrSuccessMsg('');
+        setOcrErrorMsg('❌ Không nén được ảnh và ảnh lớn hơn 5MB. Cô chọn ảnh nhỏ hơn hoặc chụp lại nhé.');
+        return;
+      }
+      await new Promise<void>((resolve) => {
         const reader = new FileReader();
         reader.onload = () => {
           if (typeof reader.result === 'string') {
@@ -353,18 +465,102 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
             setOcrSuccessMsg('');
             setOcrErrorMsg('');
           }
+          resolve();
+        };
+        reader.onerror = () => {
+          setOcrSuccessMsg('');
+          setOcrErrorMsg('❌ Không đọc được file ảnh. Cô thử chọn lại ảnh khác nhé.');
+          resolve();
         };
         reader.readAsDataURL(file);
-      } finally {
-        setIsCompressingImage(false);
+      });
+    } finally {
+      setIsCompressingImage(false);
+    }
+  };
+
+  const forgetGeminiKey = () => {
+    setGeminiKey('');
+    try {
+      localStorage.removeItem(GEMINI_KEY_STORAGE);
+    } catch {
+      // Bỏ qua: trình duyệt chặn bộ nhớ
+    }
+  };
+
+  const handleSubmitKey = () => {
+    const k = keyDraft.trim();
+    if (!looksLikeGeminiKey(k)) {
+      setKeyDialogError('Khoá chưa đúng dạng (thường bắt đầu bằng "AIza" hoặc "AQ."). Cô kiểm tra đã chép đủ, không dính dấu cách nhé.');
+      return;
+    }
+    setGeminiKey(k);
+    try {
+      if (rememberKey) localStorage.setItem(GEMINI_KEY_STORAGE, k);
+      else localStorage.removeItem(GEMINI_KEY_STORAGE);
+    } catch {
+      // Không lưu được thì vẫn dùng trong phiên này
+    }
+    setShowKeyDialog(false);
+    setKeyDialogError('');
+    void handleAnalyzeImageWithAI(k);
+  };
+
+  // Mở ảnh bằng trình duyệt để cô chuột phải -> "Tìm kiếm hình ảnh bằng Google Ống kính".
+  // - Bản cài đặt .exe (Electron): nhờ Windows mở bằng trình duyệt mặc định (cửa sổ phần mềm không có Ống kính)
+  // - Bản web: mở thẻ mới; Chrome chặn mở trực tiếp data: URL nên đổi sang blob: URL
+  const handleOpenImageInNewTab = async () => {
+    if (!imageUrl) return;
+    const electronApi = (window as any).electronEnv;
+    if (electronApi && typeof electronApi.openImageInBrowser === 'function') {
+      const r = await electronApi.openImageInBrowser(imageUrl).catch(() => null);
+      if (!r || !r.ok) {
+        setOcrErrorMsg(`Không mở được ảnh bằng trình duyệt${r?.error ? `: ${r.error}` : ''}. Cô chuột phải trực tiếp lên ảnh nhỏ nhé.`);
       }
+      return;
+    }
+    try {
+      let url = imageUrl;
+      if (imageUrl.startsWith('data:')) {
+        const blob = await (await fetch(imageUrl)).blob();
+        url = URL.createObjectURL(blob);
+        setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
+      }
+      window.open(url, '_blank', 'noopener');
+    } catch {
+      setOcrErrorMsg('Không mở được ảnh ở thẻ mới. Cô chuột phải trực tiếp lên ảnh nhỏ bên phải nhé.');
+    }
+  };
+
+  // Dán chữ đã chép (từ Google Ống kính) vào ô nội dung bài
+  const handlePasteText = async () => {
+    try {
+      const clip = await navigator.clipboard.readText();
+      if (!clip.trim()) {
+        setPasteHint('Bộ nhớ tạm đang trống. Cô bấm "Sao chép văn bản" trong Google Ống kính trước nhé.');
+        return;
+      }
+      setText(clip.replace(/\r\n/g, '\n').trim());
+      setPasteHint('✅ Đã dán văn bản vào ô nội dung. Cô đọc lại và sửa dấu nếu cần.');
+    } catch {
+      // Trình duyệt không cho đọc bộ nhớ tạm: đưa con trỏ vào ô để cô bấm Ctrl+V
+      contentTextareaRef.current?.focus();
+      setPasteHint('Trình duyệt chưa cho phép dán tự động. Con trỏ đã ở ô nội dung, cô bấm Ctrl+V để dán.');
     }
   };
 
   // AI OCR: Phân tích hình ảnh sách giáo khoa bằng Gemini AI
-  const handleAnalyzeImageWithAI = async () => {
+  const handleAnalyzeImageWithAI = async (keyOverride?: string) => {
     if (!imageUrl) {
       setOcrErrorMsg('Vui lòng chọn hoặc tải lên một hình ảnh sách giáo khoa trước khi bấm phân tích!');
+      return;
+    }
+    const userKey = (keyOverride ?? geminiKey).trim();
+    // Máy chủ chưa có khoá và cô cũng chưa nhập -> hỏi khoá trước, không gửi yêu cầu chắc chắn lỗi
+    if (aiReady !== true && !userKey) {
+      setKeyDraft('');
+      setKeyDialogError('');
+      setShowKeyDialog(true);
       return;
     }
 
@@ -377,25 +573,34 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          // Khoá cô tự nhập chỉ dùng khi máy chủ chưa có khoá riêng; máy chủ không lưu, không ghi log
+          ...(userKey ? { 'X-Gemini-Key': userKey } : {}),
         },
         body: JSON.stringify({
+          // Gửi nguyên data URL/đường dẫn; máy chủ tự xác định mime từ tiền tố
           imageBase64: imageUrl,
-          mimeType: 'image/jpeg',
         }),
       });
 
-      const resData = await response.json();
+      const resData = await response.json().catch(() => ({} as any));
 
       if (!response.ok || !resData.success) {
+        // Khoá cô nhập bị sai/thu hồi: xoá khoá đã nhớ và mở lại ô nhập khoá
+        if (resData.code === 'KEY_INVALID' && userKey) {
+          forgetGeminiKey();
+          setKeyDraft('');
+          setKeyDialogError('Khoá vừa dùng không đúng hoặc đã bị thu hồi. Cô tạo khoá mới rồi dán lại nhé.');
+          setShowKeyDialog(true);
+        }
         throw new Error(resData.error || 'Không thể trích xuất văn bản từ hình ảnh');
       }
 
-      const extracted = resData.data;
+      const extracted = resData.data || {};
 
-      if (extracted.title) {
+      if (typeof extracted.title === 'string' && extracted.title) {
         setTitle(extracted.title);
       }
-      if (extracted.content) {
+      if (typeof extracted.content === 'string' && extracted.content) {
         setText(extracted.content);
         // Tự động nhận diện thể loại thơ nếu văn bản có nhiều dòng ngắn
         const lines = String(extracted.content).split('\n').filter((l: string) => l.trim().length > 0);
@@ -404,10 +609,12 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
           setGenre('poem');
         }
       }
-      if (extracted.gradeLevel) {
-        setGradeLevel(Number(extracted.gradeLevel));
+      // Chỉ nhận khối 3/4/5 (AI có thể trả "Lớp 4", "4", 2...) — sai thì giữ khối hiện tại
+      const gradeDigit = Number(String(extracted.gradeLevel ?? '').match(/[3-5]/)?.[0]);
+      if (gradeDigit === 3 || gradeDigit === 4 || gradeDigit === 5) {
+        setGradeLevel(gradeDigit);
       }
-      if (extracted.teacherNote) {
+      if (typeof extracted.teacherNote === 'string' && extracted.teacherNote) {
         setTeacherNote(extracted.teacherNote);
       }
 
@@ -451,8 +658,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
         }
       }
 
-      const updatedLesson: Lesson = {
-        id: lessonId,
+      const freshFields: Omit<Lesson, 'id'> = {
         level: 20,
         category: isPoemOrStory ? 'poems_stories' : 'short_sentences',
         categoryTitleVi: isPoemOrStory ? (genre === 'poem' ? `Thơ SGK Lớp ${gradeLevel}` : `Văn SGK Lớp ${gradeLevel}`) : `Bài Lớp ${gradeLevel}`,
@@ -473,8 +679,38 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
         isFreePractice: isFreePractice,
       };
 
+      // Sửa bài có sẵn: giữ nguyên level/targetAccuracy/category/bookPage/subtitle... của bài gốc,
+      // chỉ ghi đè các trường cô vừa chỉnh (trước đây dựng lại từ đầu làm mất dữ liệu bài hệ thống)
+      const original = editingLessonId
+        ? (Array.isArray(allLessons) ? allLessons.find((l) => l?.id === editingLessonId) : undefined) ??
+          effectiveLessons.find((l) => l.id === editingLessonId)
+        : undefined;
+      const updatedLesson: Lesson = original
+        ? {
+            ...original,
+            title: freshFields.title,
+            text: freshFields.text,
+            descriptionVi: freshFields.descriptionVi,
+            targetWpm: freshFields.targetWpm,
+            imageUrl: freshFields.imageUrl,
+            gradeLevel: freshFields.gradeLevel,
+            authorTeacher: freshFields.authorTeacher,
+            teacherNote: freshFields.teacherNote,
+            isPoemOrStory: freshFields.isPoemOrStory,
+            genre: freshFields.genre,
+            isFreePractice: freshFields.isFreePractice,
+            // Chỉ tính lại phím trọng tâm khi nội dung đổi
+            focusKeys: original.text === freshFields.text ? original.focusKeys : freshFields.focusKeys,
+          }
+        : { id: lessonId, ...freshFields };
+
       // Đồng bộ hóa logic lưu trữ lên hệ thống đám mây Supabase / cơ sở dữ liệu
-      await onSaveLesson(updatedLesson);
+      const result = await onSaveLesson(updatedLesson);
+      if (result === false) {
+        setSaveSuccessMsg('');
+        triggerSaveToast('Chưa lưu được bài lên máy chủ. Cô kiểm tra kết nối mạng rồi bấm lưu lại nhé.');
+        return;
+      }
       setLastSavedLesson(updatedLesson);
       setSaveSuccessMsg(`🎉 Đã lưu bài "${updatedLesson.title}" và cập nhật hệ thống thành công!`);
       setEditingLessonId(updatedLesson.id);
@@ -485,8 +721,9 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
       setTimeout(() => {
         setSaveSuccessMsg('');
       }, 4500);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Lỗi khi lưu bài học trực tuyến:', err);
+      triggerSaveToast(`Lỗi khi lưu bài: ${err?.message || 'không kết nối được máy chủ'}. Cô thử lại nhé.`);
     } finally {
       setIsSavingLesson(false);
     }
@@ -570,23 +807,43 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
         const content = event.target?.result as string;
         const parsed = JSON.parse(content);
 
-        let lessonsToImport: Lesson[] = [];
+        let rawLessons: unknown[] = [];
         let assignmentsToImport: Record<number, GradeAssignment> | undefined;
 
         if (Array.isArray(parsed)) {
-          lessonsToImport = parsed;
+          rawLessons = parsed;
         } else if (parsed && typeof parsed === 'object') {
           if (Array.isArray(parsed.lessons)) {
-            lessonsToImport = parsed.lessons;
+            rawLessons = parsed.lessons;
           }
-          if (parsed.gradeAssignments && typeof parsed.gradeAssignments === 'object') {
-            assignmentsToImport = parsed.gradeAssignments;
-          }
+          assignmentsToImport = normalizeImportedAssignments(parsed.gradeAssignments);
         }
+
+        // Kiểm tra từng bài: file USB có thể bị sửa tay/hỏng, bài lỗi sẽ làm vỡ màn hình luyện gõ
+        const seenIds = new Set<string>();
+        const lessonsToImport: Lesson[] = [];
+        rawLessons.forEach((raw) => {
+          const lesson = normalizeImportedLesson(raw);
+          if (lesson && !seenIds.has(lesson.id)) {
+            seenIds.add(lesson.id);
+            lessonsToImport.push(lesson);
+          }
+        });
+        const skippedCount = rawLessons.length - lessonsToImport.length;
 
         if (lessonsToImport.length === 0) {
           alert('File JSON không chứa danh sách bài học hợp lệ!');
           return;
+        }
+
+        // Bỏ id giao bài trỏ tới bài không tồn tại
+        if (assignmentsToImport) {
+          const cleaned: Record<number, GradeAssignment> = {};
+          Object.entries(assignmentsToImport).forEach(([k, g]) => {
+            const ids = g.lessonIds.filter((id) => seenIds.has(id) || effectiveLessons.some((l) => l.id === id));
+            if (ids.length > 0) cleaned[Number(k)] = { ...g, lessonId: ids[0], lessonIds: ids };
+          });
+          assignmentsToImport = Object.keys(cleaned).length > 0 ? cleaned : undefined;
         }
 
         if (onImportLessons) {
@@ -600,7 +857,8 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
         }
 
         setOfflineSyncMsg(
-          `🎉 Nạp thành công ${lessonsToImport.length} bài học từ file USB vào máy tính này! Học sinh trên máy này có thể luyện tập ngay.`
+          `🎉 Nạp thành công ${lessonsToImport.length} bài học từ file USB vào máy tính này! Học sinh trên máy này có thể luyện tập ngay.` +
+            (skippedCount > 0 ? ` (Đã bỏ qua ${skippedCount} bài bị lỗi hoặc trùng mã.)` : '')
         );
         setTimeout(() => setOfflineSyncMsg(''), 7000);
       } catch (err: any) {
@@ -610,6 +868,13 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     reader.readAsText(file);
     e.target.value = '';
   };
+
+  // Danh sách đã chọn nhưng chỉ giữ bài còn tồn tại (bài có thể đã bị xoá sau khi chọn)
+  const validSelectedLessonIds = useMemo(() => {
+    const list = Array.isArray(selectedLessonIdsForAssign) ? selectedLessonIdsForAssign : [];
+    const existing = new Set(effectiveLessons.map((l) => l.id));
+    return Array.from(new Set(list)).filter((id) => existing.has(id));
+  }, [selectedLessonIdsForAssign, effectiveLessons]);
 
   // Khi đổi khối lớp ở tab Giao bài
   const handleSelectGradeForAssign = (grade: number) => {
@@ -654,21 +919,33 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   };
 
   // Giao bài tập cho khối lớp
-  const handleAssignSubmit = (e: React.FormEvent) => {
+  const handleAssignSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const safeSelected = Array.isArray(selectedLessonIdsForAssign) ? selectedLessonIdsForAssign : [];
+    // Bỏ id của bài đã bị xoá để không giao bài "ma" cho học sinh
+    const safeSelected = validSelectedLessonIds;
     if (safeSelected.length === 0) {
       alert('Cô vui lòng chọn ít nhất 1 bài học để giao cho khối lớp (có thể chọn 2 bài, 3 bài hoặc nhiều bài)!');
       return;
     }
 
-    onAssignLessonToGrade(selectedGradeForAssign, safeSelected, teacherName, assignNote);
-    setAssignmentSuccessMsg(
-      `✅ Đã giao thành công ${safeSelected.length} bài tập cho toàn bộ học sinh Khối Lớp ${selectedGradeForAssign}! Khi học sinh vào học, hệ thống sẽ mở các bài tập này.`
-    );
-    setTimeout(() => {
+    try {
+      const result = await onAssignLessonToGrade(selectedGradeForAssign, safeSelected, teacherName, assignNote);
+      if (result === false) {
+        setAssignmentSuccessMsg('');
+        triggerSaveToast('Chưa giao được bài lên máy chủ. Cô kiểm tra kết nối mạng rồi thử lại nhé.');
+        return;
+      }
+      setAssignmentSuccessMsg(
+        `✅ Đã giao thành công ${safeSelected.length} bài tập cho toàn bộ học sinh Khối Lớp ${selectedGradeForAssign}! Khi học sinh vào học, hệ thống sẽ mở các bài tập này.`
+      );
+      setTimeout(() => {
+        setAssignmentSuccessMsg('');
+      }, 5000);
+    } catch (err: any) {
+      console.error('Lỗi khi giao bài:', err);
       setAssignmentSuccessMsg('');
-    }, 5000);
+      triggerSaveToast(`Lỗi khi giao bài: ${err?.message || 'không kết nối được máy chủ'}. Cô thử lại nhé.`);
+    }
   };
 
   // Sắp xếp an toàn danh sách bài học (Auto-sorting)
@@ -807,199 +1084,150 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     ];
   }, [effectiveLessons, allAssignedLessonIds, searchKeyword, sortBy]);
 
-  // Danh sách bài chuyên đề thơ văn SGK
-  const filteredPoemLessons = useMemo(() => {
-    return effectiveLessons.filter((l) => {
-      const isPoemOrStoryItem = l.isPoemOrStory || l.category === 'poems_stories';
-      if (!isPoemOrStoryItem) return false;
-      if (poemGradeFilter !== 'all' && l.gradeLevel !== poemGradeFilter) return false;
-      const lowerTitle = (l.title || '').toLowerCase();
-      if (poemGenreFilter === 'poem' && l.genre !== 'poem' && !lowerTitle.includes('thơ')) return false;
-      if (poemGenreFilter === 'prose' && l.genre !== 'prose' && !lowerTitle.includes('văn') && !lowerTitle.includes('đoạn')) return false;
-      if (poemGenreFilter === 'assigned' && !allAssignedLessonIds.has(l.id)) return false;
-      if (poemGenreFilter === 'free' && !(l.isFreePractice ?? true)) return false;
-      if (poemSearchKeyword.trim()) {
-        const kw = poemSearchKeyword.toLowerCase();
-        return lowerTitle.includes(kw) || (l.text || '').toLowerCase().includes(kw);
-      }
-      return true;
-    }).sort((a, b) => {
-      const gA = a.gradeLevel || 3;
-      const gB = b.gradeLevel || 3;
-      if (gA !== gB) return gA - gB;
-      return (a.level || 0) - (b.level || 0);
-    });
-  }, [effectiveLessons, poemGradeFilter, poemGenreFilter, poemSearchKeyword, allAssignedLessonIds]);
-
-  // Render thẻ bài học dùng chung cho Responsive Grid (Tối ưu hóa không gian)
-  const renderLessonCard = (l: Lesson) => {
+  // Một DÒNG bài học (gọn, đọc lướt nhanh); bấm tên bài để xem trước nội dung
+  const renderLessonRow = (l: Lesson) => {
     if (!l || !l.id) return null;
     const isTeacherMade = l.id.startsWith('teacher-') || !!l.authorTeacher;
     const assignedGrades = getAssignedGradesForLesson(l.id);
     const isAssigned = assignedGrades.length > 0;
     const isPoem = l.isPoemOrStory || l.category === 'poems_stories';
     const isFree = l.isFreePractice ?? true;
+    const isOpenPreview = previewLessonId === l.id;
+    const kind = isPoem ? (l.genre === 'prose' ? 'Văn SGK' : 'Thơ SGK') : 'Luyện phím';
 
     return (
-      <div
-        key={`card-${l.id}`}
-        className={`p-3.5 rounded-2xl bg-white border-2 transition-all flex flex-col justify-between gap-2.5 shadow-xs hover:shadow-md ${
-          isAssigned
-            ? 'border-rose-400 ring-2 ring-rose-100 bg-gradient-to-b from-rose-50/30 to-white'
-            : isPoem
-            ? 'border-emerald-300 hover:border-emerald-500 bg-gradient-to-b from-emerald-50/20 to-white'
-            : 'border-slate-200 hover:border-emerald-400'
-        }`}
-      >
-        <div>
-          {/* Badges Bar */}
-          <div className="flex items-start justify-between gap-1.5 mb-2">
-            <div className="flex items-center gap-1 flex-wrap">
-              {l.gradeLevel && (
-                <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-sky-100 text-sky-800 border border-sky-200">
-                  Lớp {l.gradeLevel}
-                </span>
-              )}
+      <li key={`row-${l.id}`} data-lesson-row={l.id} className="border-b border-slate-100 last:border-b-0">
+        <div className="grid grid-cols-[auto_1fr_auto] xl:grid-cols-[64px_1fr_96px_80px_150px_auto] items-center gap-x-3 gap-y-1 px-3 py-2 hover:bg-slate-50">
+          <span className="text-xs font-black px-2 py-1 rounded-lg bg-sky-100 text-sky-800 text-center">
+            Lớp {l.gradeLevel || '–'}
+          </span>
 
-              {isAssigned ? (
-                <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-rose-500 text-white shadow-2xs flex items-center gap-1 animate-pulse">
-                  <span>🎯 Đang Giao Lớp {assignedGrades.join(', ')}</span>
-                </span>
-              ) : isFree ? (
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200 flex items-center gap-0.5">
-                  <Unlock className="w-2.5 h-2.5 text-teal-600" />
-                  <span>Mở tự do</span>
-                </span>
-              ) : (
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 flex items-center gap-0.5">
-                  <Lock className="w-2.5 h-2.5 text-slate-500" />
-                  <span>Khóa ngoài giờ</span>
-                </span>
-              )}
+          <button
+            type="button"
+            onClick={() => setPreviewLessonId(isOpenPreview ? null : l.id)}
+            className="min-w-0 text-left cursor-pointer group"
+            title="Bấm để xem trước nội dung bài"
+            aria-expanded={isOpenPreview}
+          >
+            <span className="block font-bold text-sm text-slate-900 truncate group-hover:text-emerald-700">
+              {isOpenPreview ? '▾' : '▸'} {l.title}
+            </span>
+            <span className="block text-xs text-slate-500 truncate">
+              {(l.text || '').replace(/\s+/g, ' ').slice(0, 90) || '(Chưa có nội dung)'}
+            </span>
+          </button>
 
-              {isPoem && (
-                <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-purple-100 text-purple-900 border border-purple-200 flex items-center gap-0.5">
-                  <Feather className="w-2.5 h-2.5 text-purple-700" />
-                  <span>{l.genre === 'poem' ? 'Thơ SGK' : l.genre === 'prose' ? 'Văn SGK' : 'Thơ/Văn'}</span>
-                </span>
-              )}
+          <span className="hidden xl:inline text-xs font-semibold text-slate-600">
+            {isPoem && <Feather className="inline w-3.5 h-3.5 mr-1 text-purple-600" />}
+            {kind}
+          </span>
+          <span className="hidden xl:inline text-xs font-semibold text-slate-600 tabular-nums">{l.targetWpm || 18} WPM</span>
 
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-700">
-                {l.targetWpm || 18} WPM
+          <span className="hidden xl:flex items-center">
+            {isAssigned ? (
+              <span className="text-xs font-black px-2 py-1 rounded-lg bg-rose-100 text-rose-800">
+                🎯 Đang giao lớp {assignedGrades.join(', ')}
               </span>
+            ) : isFree ? (
+              <span className="text-xs font-bold px-2 py-1 rounded-lg bg-teal-50 text-teal-800 flex items-center gap-1">
+                <Unlock className="w-3 h-3" /> Mở tự do
+              </span>
+            ) : (
+              <span className="text-xs font-bold px-2 py-1 rounded-lg bg-slate-100 text-slate-600 flex items-center gap-1">
+                <Lock className="w-3 h-3" /> Chỉ khi giao
+              </span>
+            )}
+          </span>
 
-              {isTeacherMade && (
-                <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300">
-                  {l.authorTeacher || 'Cô soạn'}
-                </span>
-              )}
-            </div>
-
-            {/* Delete Button (chỉ cho phép xóa bài do cô giáo tạo, loại bỏ hoàn toàn nút khôi phục bài gốc) */}
-            {isTeacherMade && (
+          <div className="flex items-center gap-1 justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                loadLessonIntoEditor(l);
+                setActiveTab('editor');
+              }}
+              className="h-8 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 cursor-pointer"
+              title="Sửa nội dung, ảnh SGK của bài này"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sửa</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                // Gộp vào lựa chọn hiện có thay vì thay thế
+                setSelectedLessonIdsForAssign((prev) =>
+                  Array.isArray(prev) && prev.includes(l.id) ? prev : [...(Array.isArray(prev) ? prev : []), l.id]
+                );
+                if (l.gradeLevel) setSelectedGradeForAssign(l.gradeLevel);
+                setActiveTab('assign');
+              }}
+              className="h-8 px-2.5 rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-900 font-bold text-xs flex items-center gap-1 cursor-pointer"
+              title="Giao bài này cho cả khối lớp"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Giao</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onSelectLesson(l);
+                onClose();
+              }}
+              className="h-8 w-8 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center cursor-pointer"
+              title="Gõ thử bài này trên màn hình luyện tập"
+              aria-label="Gõ thử"
+            >
+              <Eye className="w-4 h-4" />
+            </button>
+            {l.id.startsWith('teacher-') && (
               <button
                 type="button"
-                onClick={() => onDeleteLesson(l.id)}
-                className="text-slate-400 hover:text-rose-600 transition-colors p-1 cursor-pointer shrink-0"
-                title="Xóa bài do cô soạn này"
+                onClick={() => {
+                  if (window.confirm(`Cô có chắc muốn xoá bài "${l.title}"? Thao tác này không hoàn tác được.`)) {
+                    onDeleteLesson(l.id);
+                  }
+                }}
+                className="h-8 w-8 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center cursor-pointer"
+                title="Xoá bài do cô soạn"
+                aria-label="Xoá bài"
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <Trash2 className="w-4 h-4" />
               </button>
             )}
           </div>
+        </div>
 
-          {/* Lesson Title */}
-          <h4 className="font-black text-sm text-slate-900 line-clamp-1 leading-snug" title={l.title}>
-            {l.title}
-          </h4>
-
-          {/* Sample Text Preview (Clear typography, friendly formatting) */}
-          <div className="mt-1.5 p-2 rounded-xl bg-slate-50 border border-slate-200/80 font-sgk-text font-semibold text-xs text-slate-700 line-clamp-3 leading-relaxed whitespace-pre-line select-text tracking-wide">
-            {l.text || '(Chưa có nội dung văn bản)'}
-          </div>
-
-          {/* Image & Teacher Note preview */}
-          <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
-            {l.imageUrl ? (
-              <div className="flex items-center gap-1 text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 truncate">
-                <ImageIcon className="w-3 h-3 text-emerald-600 shrink-0" />
-                <span className="truncate">Có ảnh minh họa SGK</span>
+        {/* Xem trước: nội dung đầy đủ, ảnh SGK, lời dặn, quyền tự do luyện */}
+        {isOpenPreview && (
+          <div className="mx-3 mb-3 p-3 rounded-xl bg-slate-50 border border-slate-200 grid gap-3 sm:grid-cols-[1fr_auto]">
+            <div className="min-w-0 space-y-2">
+              <p className="font-sgk-text text-sm text-slate-800 whitespace-pre-line leading-relaxed max-h-48 overflow-y-auto">
+                {l.text || '(Chưa có nội dung văn bản)'}
+              </p>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                <span className="xl:hidden font-semibold">{kind} · {l.targetWpm || 18} WPM</span>
+                {isTeacherMade && <span>✍️ {l.authorTeacher || 'Cô soạn'}</span>}
+                {l.teacherNote && <span className="italic">💬 {l.teacherNote}</span>}
+                <button
+                  type="button"
+                  onClick={() => handleToggleFreePractice(l)}
+                  className={`h-7 px-2 rounded-lg border font-bold flex items-center gap-1 cursor-pointer ${
+                    isFree ? 'bg-teal-50 border-teal-300 text-teal-800' : 'bg-white border-slate-300 text-slate-600'
+                  }`}
+                  title="Bật/tắt cho học sinh tự mở bài này ngoài giờ"
+                >
+                  {isFree ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+                  {isFree ? 'Đang mở tự do · bấm để khoá' : 'Đang khoá · bấm để mở tự do'}
+                </button>
               </div>
-            ) : (
-              <span className="text-slate-400 text-[10px]">Chưa kèm ảnh SGK</span>
-            )}
-
-            {l.teacherNote && (
-              <span className="text-[10px] text-slate-500 italic truncate max-w-[140px]" title={l.teacherNote}>
-                💬 {l.teacherNote}
-              </span>
+            </div>
+            {l.imageUrl && (
+              <img src={l.imageUrl} alt={`Ảnh SGK bài ${l.title}`} className="w-40 h-28 object-contain rounded-lg bg-white border border-slate-200" />
             )}
           </div>
-        </div>
-
-        {/* Action Buttons Toolbar */}
-        <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5 flex-wrap">
-          <button
-            type="button"
-            onClick={() => {
-              loadLessonIntoEditor(l);
-              setActiveTab('editor');
-            }}
-            className="flex-1 py-1.5 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition-all shadow-xs flex items-center justify-center gap-1 cursor-pointer active:scale-95"
-            title="Mở trình soạn thảo để sửa bài học và cập nhật hình ảnh SGK"
-          >
-            <Edit3 className="w-3.5 h-3.5" />
-            <span>Sửa Bài &amp; Ảnh</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedLessonIdsForAssign([l.id]);
-              if (l.gradeLevel) setSelectedGradeForAssign(l.gradeLevel);
-              setActiveTab('assign');
-            }}
-            className="py-1.5 px-2.5 rounded-xl bg-sky-100 hover:bg-sky-200 text-sky-900 font-black text-xs transition-all flex items-center justify-center gap-1 cursor-pointer"
-            title="Giao bài này cho cả khối lớp làm bài tập"
-          >
-            <Send className="w-3.5 h-3.5 text-sky-600" />
-            <span>Giao Bài</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              onSelectLesson(l);
-              onClose();
-            }}
-            className="py-1.5 px-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all flex items-center justify-center gap-1 cursor-pointer"
-            title="Luyện gõ thử bài này trên màn hình luyện tập chính"
-          >
-            <Eye className="w-3.5 h-3.5 text-slate-500" />
-            <span className="hidden sm:inline">Gõ Thử</span>
-          </button>
-
-          {/* Quick toggle Free Practice for Poem/Prose */}
-          {isPoem && (
-            <button
-              type="button"
-              onClick={() => handleToggleFreePractice(l)}
-              className={`p-1.5 rounded-xl border transition-colors cursor-pointer ${
-                isFree
-                  ? 'bg-teal-50 border-teal-300 text-teal-800 hover:bg-teal-100'
-                  : 'bg-slate-50 border-slate-300 text-slate-600 hover:bg-slate-100'
-              }`}
-              title={
-                isFree
-                  ? 'Học sinh đang được tự do luyện gõ. Bấm để khóa chế độ tự do.'
-                  : 'Đang khóa tự do. Bấm để mở quyền cho học sinh tự do gõ ngoài giờ.'
-              }
-            >
-              {isFree ? <Unlock className="w-3.5 h-3.5 text-teal-600" /> : <Lock className="w-3.5 h-3.5 text-slate-500" />}
-            </button>
-          )}
-        </div>
-      </div>
+        )}
+      </li>
     );
   };
 
@@ -1021,13 +1249,23 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
               : 'opacity-100 translate-y-0 scale-100'
           }`}
         >
-          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 p-4 sm:p-4.5 text-white shadow-2xl shadow-emerald-950/50 border-2 border-emerald-300 backdrop-blur-md flex items-center gap-3.5">
+          <div
+            className={`relative overflow-hidden rounded-2xl bg-gradient-to-r p-4 sm:p-4.5 text-white shadow-2xl border-2 backdrop-blur-md flex items-center gap-3.5 ${
+              saveToastError
+                ? 'from-rose-600 via-red-600 to-rose-700 shadow-rose-950/50 border-rose-300'
+                : 'from-emerald-600 via-teal-600 to-emerald-700 shadow-emerald-950/50 border-emerald-300'
+            }`}
+          >
             {/* Hiệu ứng tia sáng phản chiếu nhẹ */}
             <div className="absolute -top-10 -right-10 w-28 h-28 bg-white/15 rounded-full blur-xl pointer-events-none" />
 
             {/* Icon tích xanh thành công */}
             <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-white/20 border-2 border-white/40 flex items-center justify-center shrink-0 shadow-inner">
-              <CheckCircle2 className="w-7 h-7 text-white drop-shadow-md animate-pulse" />
+              {saveToastError ? (
+                <AlertCircle className="w-7 h-7 text-white drop-shadow-md" />
+              ) : (
+                <CheckCircle2 className="w-7 h-7 text-white drop-shadow-md animate-pulse" />
+              )}
             </div>
 
             {/* Nội dung thông báo IN HOA chuẩn xác theo yêu cầu */}
@@ -1035,11 +1273,11 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
               <div className="flex items-center gap-1.5 flex-wrap">
                 <Sparkles className="w-4 h-4 text-amber-300 shrink-0" />
                 <h4 className="text-xs sm:text-sm font-black tracking-wider text-white uppercase drop-shadow-xs">
-                  THÔNG BÁO ĐÃ GHI NHẬN YÊU CẦU THÀNH CÔNG
+                  {saveToastError ? 'CHƯA LƯU ĐƯỢC DỮ LIỆU' : 'THÔNG BÁO ĐÃ GHI NHẬN YÊU CẦU THÀNH CÔNG'}
                 </h4>
               </div>
-              <p className="text-[11px] sm:text-xs text-emerald-100 font-semibold mt-1 leading-snug">
-                Dữ liệu bài soạn đã được lưu lại trực tuyến &amp; đồng bộ hóa toàn diện lên máy chủ đám mây!
+              <p className="text-[11px] sm:text-xs text-white/90 font-semibold mt-1 leading-snug">
+                {saveToastError || 'Dữ liệu bài soạn đã được lưu lại trực tuyến & đồng bộ hóa toàn diện lên máy chủ đám mây!'}
               </p>
             </div>
 
@@ -1067,55 +1305,26 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
       {/* CỬA SỔ QUẢN TRỊ TỐI ƯU HÓA TỐI ĐA KHÔNG GIAN (MAX-W-[1680PX] H-[98VH]) */}
       <div className="relative w-[99vw] max-w-[1680px] h-[98vh] max-h-[98vh] bg-white border-4 border-emerald-400 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-800">
         
-        {/* ======================================================== */}
-        {/* HEADER QUẢN TRỊ CAO CẤP                                  */}
-        {/* ======================================================== */}
-        <div className="flex items-center justify-between px-3 sm:px-5 py-3 border-b-2 border-emerald-200 bg-gradient-to-r from-emerald-100 via-teal-50 to-amber-50 shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-600 border-2 border-white flex items-center justify-center text-xl sm:text-2xl shadow-md text-white shrink-0">
+        {/* THANH TIÊU ĐỀ GỌN: tên cổng + nút đóng (đăng xuất nằm cuối menu trái) */}
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-lg shrink-0" aria-hidden="true">
               👩‍🏫
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-sm sm:text-lg font-black text-slate-900 tracking-tight">
-                  Cổng Quản Trị Giáo Viên &amp; Biên Soạn Bài SGK
-                </h2>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black border border-emerald-300 flex items-center gap-1 shadow-2xs">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Supabase Cloud Realtime
-                </span>
-                <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-[10px] font-black border border-indigo-200 hidden md:inline">
-                  ✨ AI OCR Phân Tích Ảnh
-                </span>
-                <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 text-[10px] font-black border border-purple-200 hidden lg:inline">
-                  📜 Chuyên Đề Thơ &amp; Văn SGK
-                </span>
-              </div>
-              <p className="text-[11px] sm:text-xs text-emerald-900 font-bold hidden sm:block">
-                Quản lý phân cấp bài học Lớp 3, 4, 5 • Chuyên đề Thơ &amp; Văn SGK • Giao bài tập về nhà • AI trích xuất chữ từ ảnh
-              </p>
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-base sm:text-lg font-black text-slate-900 leading-tight truncate">Cổng Giáo Viên</h2>
+              <p className="text-xs text-emerald-900 font-semibold truncate">Soạn bài, giao bài và sao lưu bài học Lớp 3 – 4 – 5</p>
             </div>
           </div>
-
-          <div className="flex items-center gap-2">
-            {isAuthenticated && (
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="px-2.5 py-1 text-xs text-slate-500 hover:text-slate-800 hover:underline cursor-pointer"
-              >
-                Đăng xuất
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 sm:p-2 rounded-2xl bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer border border-slate-200 shadow-sm"
-              title="Đóng cửa sổ quản trị"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-10 h-10 rounded-xl bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-800 flex items-center justify-center cursor-pointer border border-slate-200 shrink-0"
+            title="Đóng Cổng Giáo Viên"
+            aria-label="Đóng"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         {/* ======================================================== */}
@@ -1196,193 +1405,117 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
             </div>
           </div>
         ) : (
-          /* Authenticated Teacher Workspace */
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            {/* ======================================================== */}
-            {/* THANH DANH MỤC TAB QUẢN TRỊ                              */}
-            {/* ======================================================== */}
-            <div className="flex items-center gap-2 px-3 sm:px-4 py-2.5 bg-emerald-50/90 border-b border-emerald-200 flex-wrap justify-between shrink-0">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {/* TAB 1: DANH SÁCH BÀI HỌC & SẮP XẾP PHÂN CẤP */}
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('manage')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                    activeTab === 'manage'
-                      ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
-                      : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-                  }`}
-                >
-                  <BookOpen className="w-4 h-4" />
-                  <span>Danh Sách &amp; Phân Cấp Bài Học ({effectiveLessons.length})</span>
-                </button>
+          /* KHU LÀM VIỆC: MENU DỌC BÊN TRÁI + NỘI DUNG MỤC ĐANG CHỌN */
+          <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
+            <nav
+              aria-label="Menu Cổng Giáo Viên"
+              className="shrink-0 lg:w-56 flex lg:flex-col gap-1 p-2 lg:p-3 bg-slate-50 border-b lg:border-b-0 lg:border-r border-slate-200 overflow-x-auto"
+            >
+              {[
+                { id: 'manage' as const, icon: <BookOpen className="w-5 h-5" />, label: 'Bài học', extra: String(effectiveLessons.length) },
+                { id: 'editor' as const, icon: <Edit3 className="w-5 h-5" />, label: editingLessonId ? 'Sửa bài' : 'Soạn bài', extra: '' },
+                { id: 'assign' as const, icon: <Send className="w-5 h-5" />, label: 'Giao bài', extra: allAssignedLessonIds.size > 0 ? String(allAssignedLessonIds.size) : '' },
+                { id: 'backup' as const, icon: <HardDrive className="w-5 h-5" />, label: 'Sao lưu & đồng bộ', extra: '' },
+              ].map((item) => {
+                const active = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    data-teacher-nav={item.id}
+                    onClick={() => setActiveTab(item.id)}
+                    aria-current={active ? 'page' : undefined}
+                    className={`shrink-0 min-h-[44px] px-3 rounded-xl flex items-center gap-2.5 text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                      active ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-700 hover:bg-white hover:text-emerald-800'
+                    }`}
+                  >
+                    {item.icon}
+                    <span className="flex-1 text-left">{item.label}</span>
+                    {item.extra && (
+                      <span
+                        className={`text-xs font-black px-1.5 rounded-md ${
+                          active ? 'bg-white/25 text-white' : item.id === 'assign' ? 'bg-rose-100 text-rose-700' : 'bg-slate-200 text-slate-700'
+                        }`}
+                      >
+                        {item.extra}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+              <div className="flex-1" />
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="shrink-0 min-h-[44px] px-3 rounded-xl text-sm font-semibold text-slate-500 hover:text-slate-900 hover:bg-white cursor-pointer whitespace-nowrap text-left"
+              >
+                Đăng xuất
+              </button>
+            </nav>
 
-                {/* TAB 2: CHUYÊN ĐỀ "LUYỆN GÕ THƠ & VĂN SGK" */}
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('poems_sgk')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                    activeTab === 'poems_sgk'
-                      ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md ring-2 ring-purple-300'
-                      : 'bg-white text-purple-900 hover:bg-purple-50 border border-purple-200'
-                  }`}
-                >
-                  <Feather className="w-4 h-4 text-amber-300" />
-                  <span>Luyện Gõ Thơ &amp; Văn SGK</span>
-                  <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 text-[9px] font-black uppercase">
-                    Mới
-                  </span>
-                </button>
+            <div className="flex-1 min-w-0 flex flex-col min-h-0">
+            {/* Input file ẩn cho chức năng nạp từ USB */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleImportLessonsFromUSB}
+              accept=".json,application/json"
+              className="hidden"
+            />
 
-                {/* TAB 3: SOẠN THẢO BÀI MỚI & AI OCR */}
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('editor')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                    activeTab === 'editor'
-                      ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
-                      : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-                  }`}
-                >
-                  <Edit3 className="w-4 h-4" />
-                  <span>
-                    {editingLessonId ? `Sửa Bài: ${title || 'Đang chọn'}` : 'Soạn Bài & Phân Tích Ảnh AI'}
-                  </span>
-                </button>
-
-                {/* TAB 4: GIAO BÀI TẬP CHO KHỐI LỚP */}
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('assign')}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                    activeTab === 'assign'
-                      ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
-                      : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-                  }`}
-                >
-                  <Send className="w-4 h-4" />
-                  <span>Giao Bài Cho Khối Lớp</span>
-                  {allAssignedLessonIds.size > 0 && (
-                    <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-black">
-                      {allAssignedLessonIds.size} bài
-                    </span>
-                  )}
-                </button>
-              </div>
-
-              {/* Action Buttons right side */}
-              <div className="flex items-center gap-2 ml-auto flex-wrap">
-                {/* Input file ẩn cho chức năng nạp từ USB */}
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleImportLessonsFromUSB}
-                  accept=".json,application/json"
-                  className="hidden"
-                />
-
-                {/* Nút 1: Xuất bài học ra file JSON cho USB */}
-                <button
-                  type="button"
-                  onClick={handleExportLessonsToUSB}
-                  className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs flex items-center gap-1.5 shadow-sm cursor-pointer border border-blue-400 active:scale-95 transition-all"
-                  title="Xuất toàn bộ bài học ra file JSON để copy vào USB mang sang cài đặt trên các máy tính học sinh khác"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>💾 Xuất File USB (.json)</span>
-                </button>
-
-                {/* Nút 2: Nạp bài học từ USB vào máy học sinh */}
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-xs flex items-center gap-1.5 shadow-sm cursor-pointer border border-purple-400 active:scale-95 transition-all"
-                  title="Chọn file bài học JSON từ USB để nạp vào máy tính học sinh này (không cần internet)"
-                >
-                  <HardDrive className="w-3.5 h-3.5" />
-                  <span>📥 Nạp Từ USB</span>
-                </button>
-
-                {/* Nút 3: Đồng bộ đám mây Supabase */}
-                <button
-                  type="button"
-                  onClick={handleSyncAllToSupabase}
-                  disabled={isSyncingAllToSupabase}
-                  className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white font-black text-xs flex items-center gap-1.5 shadow-sm cursor-pointer border border-emerald-500"
-                  title="Lưu trữ toàn bộ danh sách bài học và hình ảnh SGK lên Supabase Cloud Database"
-                >
-                  {isSyncingAllToSupabase ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Đang đồng bộ...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>☁️ Đồng Bộ Cloud</span>
-                    </>
-                  )}
-                </button>
-
-                {/* Nút 4: Soạn bài mới */}
-                <button
-                  type="button"
-                  onClick={() => handleStartCreateNew(false)}
-                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1 shadow-sm cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>+ Soạn Bài Mới</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Thông báo sao chép USB hoặc Sync Cloud */}
+            {/* Thông báo sao lưu USB / đồng bộ Cloud (hiện ở mọi mục) */}
             {offlineSyncMsg && (
-              <div className="mx-4 mt-2 p-2.5 rounded-2xl bg-blue-50 border-2 border-blue-400 text-blue-950 text-xs font-bold flex items-center gap-2 animate-in fade-in shrink-0">
-                <span>{offlineSyncMsg}</span>
+              <div className="mx-4 mt-3 p-2.5 rounded-xl bg-blue-50 border border-blue-300 text-blue-950 text-sm font-semibold shrink-0" role="status">
+                {offlineSyncMsg}
               </div>
             )}
-
-            {/* Sync All notification banner */}
             {syncAllMsg && (
-              <div className="mx-4 mt-2 p-2.5 rounded-2xl bg-emerald-50 border-2 border-emerald-400 text-emerald-950 text-xs font-bold flex items-center gap-2 animate-in fade-in shrink-0">
-                <span>{syncAllMsg}</span>
+              <div className="mx-4 mt-3 p-2.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-950 text-sm font-semibold shrink-0" role="status">
+                {syncAllMsg}
               </div>
             )}
 
             {/* ======================================================== */}
             {/* NỘI DUNG CHÍNH CỦA CÁC TAB (SCROLLABLE CONTAINER)        */}
             {/* ======================================================== */}
-            <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 custom-scrollbar">
+            <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-5 custom-scrollbar">
               
               {/* ========================================================================= */}
               {/* TAB 1: QUẢN LÝ & TỰ ĐỘNG SẮP XẾP BÀI HỌC THEO PHÂN CẤP (MANAGE TAB)      */}
               {/* ========================================================================= */}
               {activeTab === 'manage' && (
-                <div className="space-y-3.5">
-                  {/* BỘ LỌC VÀ CƠ CHẾ SẮP XẾP TỰ ĐỘNG (AUTO-SORTING TOOLBAR) */}
-                  <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3 flex-wrap text-xs shadow-2xs">
-                    {/* Filter buttons by Grade */}
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="font-black text-slate-600 flex items-center gap-1">
-                        <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Bộ lọc:</span>
-                      </span>
+                <div className="space-y-3">
+                  {/* Tiêu đề mục + nút chính duy nhất */}
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <h3 className="text-lg font-black text-slate-900">Bài học <span className="text-slate-400 font-bold">({filteredManageLessons.length})</span></h3>
+                    <button
+                      type="button"
+                      onClick={() => handleStartCreateNew(false)}
+                      className="min-h-[40px] px-4 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm flex items-center gap-1.5 shadow-sm cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" /> Soạn bài mới
+                    </button>
+                  </div>
+
+                  {/* Bộ lọc (gồm cả Thơ & Văn SGK) · tìm kiếm · sắp xếp */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-1 flex-wrap" role="group" aria-label="Lọc bài học">
                       {[
-                        { label: `Tất cả (${effectiveLessons.length})`, val: 'all' as const },
-                        { label: '🎯 Đang giao bài', val: 'assigned' as const },
-                        { label: '📘 Khối Lớp 3', val: 3 },
-                        { label: '📗 Khối Lớp 4', val: 4 },
-                        { label: '📙 Khối Lớp 5', val: 5 },
+                        { label: 'Tất cả', val: 'all' as const },
+                        { label: '🎯 Đang giao', val: 'assigned' as const },
+                        { label: 'Lớp 3', val: 3 },
+                        { label: 'Lớp 4', val: 4 },
+                        { label: 'Lớp 5', val: 5 },
                         { label: '📜 Thơ & Văn SGK', val: 'poems' as const },
                       ].map((item) => (
                         <button
                           key={String(item.val)}
                           type="button"
                           onClick={() => setGradeFilter(item.val)}
-                          className={`px-2.5 py-1 rounded-lg font-black transition-all cursor-pointer ${
+                          aria-pressed={gradeFilter === item.val}
+                          className={`h-9 px-3 rounded-full text-sm font-bold transition-colors cursor-pointer ${
                             gradeFilter === item.val
-                              ? 'bg-emerald-600 text-white shadow-xs'
+                              ? 'bg-emerald-600 text-white'
                               : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
                           }`}
                         >
@@ -1390,224 +1523,59 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                         </button>
                       ))}
                     </div>
-
-                    {/* Sắp xếp tự động (Auto-sorting selector) & Tìm kiếm */}
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {/* Sắp xếp tự động */}
-                      <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-xl border border-slate-300">
-                        <span className="text-slate-500 font-bold text-[11px]">Sắp xếp:</span>
-                        <select
-                          value={sortBy}
-                          onChange={(e: any) => setSortBy(e.target.value)}
-                          className="bg-transparent text-slate-800 font-black text-xs focus:outline-none cursor-pointer"
-                        >
-                          <option value="hierarchy">⭐ Tự động phân cấp (Lớp 3 ➔ 4 ➔ 5)</option>
-                          <option value="assigned_first">🎯 Bài đang giao lên đầu</option>
-                          <option value="poems_first">📜 Bài thơ &amp; văn SGK lên đầu</option>
-                          <option value="title_az">🔤 Tên bài (A ➔ Z)</option>
-                          <option value="wpm_asc">⚡ Tốc độ WPM tăng dần</option>
-                        </select>
-                      </div>
-
-                      {/* Chế độ xem: Phân nhóm hệ thống vs Lưới liền */}
-                      <div className="flex items-center bg-slate-200 p-0.5 rounded-lg border border-slate-300">
-                        <button
-                          type="button"
-                          onClick={() => setViewMode('grouped')}
-                          className={`px-2 py-0.5 rounded-md font-black text-[11px] transition-all cursor-pointer ${
-                            viewMode === 'grouped' ? 'bg-white text-emerald-800 shadow-2xs' : 'text-slate-600'
-                          }`}
-                          title="Hiển thị chia theo từng mục phân cấp: Bài đã giao, Lớp 3, Lớp 4, Lớp 5"
-                        >
-                          Theo Nhóm
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setViewMode('grid')}
-                          className={`px-2 py-0.5 rounded-md font-black text-[11px] transition-all cursor-pointer ${
-                            viewMode === 'grid' ? 'bg-white text-emerald-800 shadow-2xs' : 'text-slate-600'
-                          }`}
-                          title="Hiển thị tất cả dưới dạng lưới liên tục"
-                        >
-                          Lưới Tràn
-                        </button>
-                      </div>
-
-                      {/* Search Input */}
-                      <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-xl border border-slate-300 w-44 sm:w-56">
-                        <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <div className="flex items-center gap-2 ml-auto flex-wrap">
+                      <label className="h-9 flex items-center gap-1.5 bg-white px-3 rounded-full border border-slate-300 w-48 sm:w-60">
+                        <Search className="w-4 h-4 text-slate-400 shrink-0" />
                         <input
-                          type="text"
+                          type="search"
                           value={searchKeyword}
                           onChange={(e) => setSearchKeyword(e.target.value)}
-                          placeholder="Tìm bài học..."
-                          className="w-full text-xs bg-transparent focus:outline-none"
+                          placeholder="Tìm tên hoặc nội dung bài…"
+                          aria-label="Tìm bài học"
+                          className="w-full text-sm bg-transparent focus:outline-none"
                         />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* HIỂN THỊ DANH SÁCH BÀI HỌC DẠNG RESPONSIVE GRID TẬN DỤNG TOÀN MÀN HÌNH */}
-                  {viewMode === 'grouped' && gradeFilter === 'all' ? (
-                    /* HỆ THỐNG PHÂN CẤP THEO TỪNG NHÓM (HIERARCHY GROUPING) */
-                    <div className="space-y-5">
-                      {groupedManageLessons.map((group) => {
-                        if (!group || !Array.isArray(group.lessons) || group.lessons.length === 0) return null;
-                        return (
-                          <div key={group.id} className={`p-3.5 rounded-3xl border-2 ${group.borderColor} shadow-2xs space-y-3`}>
-                            {/* Group Header */}
-                            <div className="flex items-center justify-between gap-2 flex-wrap pb-1.5 border-b border-slate-200/80">
-                              <div className="flex items-center gap-2">
-                                <h3 className={`font-black text-xs sm:text-sm ${group.textColor} tracking-tight`}>
-                                  {group.title}
-                                </h3>
-                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${group.badgeColor} shadow-2xs`}>
-                                  {group.lessons.length} bài
-                                </span>
-                              </div>
-
-                              <span className="text-[11px] text-slate-500 font-medium hidden sm:inline">
-                                Bấm "Sửa Bài &amp; Ảnh" để hiệu chỉnh nội dung hoặc "Giao Bài" cho học sinh
-                              </span>
-                            </div>
-
-                            {/* Responsive Grid for Lessons in Group */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-3.5">
-                              {group.lessons.map((lesson) => renderLessonCard(lesson))}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    /* LƯỚI LINH HOẠT TOÀN BỘ (RESPONSIVE GRID) */
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-xs text-slate-500 font-bold px-1">
-                        <span>Đang hiển thị {filteredManageLessons.length} bài học</span>
-                        <span>Lưới hiển thị đa cột tự động co giãn theo độ phân giải màn hình</span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-3.5">
-                        {filteredManageLessons.map((lesson) => renderLessonCard(lesson))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* ========================================================================= */}
-              {/* TAB 2: CHUYÊN ĐỀ "LUYỆN GÕ CÁC BÀI THƠ, VĂN THEO SGK"                    */}
-              {/* ========================================================================= */}
-              {activeTab === 'poems_sgk' && (
-                <div className="space-y-4">
-                  {/* Hero Banner Chuyên Đề */}
-                  <div className="p-4 rounded-3xl bg-gradient-to-r from-purple-700 via-indigo-700 to-sky-700 text-white shadow-md flex items-center justify-between gap-4 flex-wrap">
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-2xl bg-white/20 border-2 border-white/40 flex items-center justify-center text-2xl shadow-inner shrink-0">
-                        📜
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-base sm:text-lg font-black tracking-tight">
-                            Chuyên Đề: Luyện Gõ Các Bài Thơ &amp; Văn Theo SGK
-                          </h3>
-                          <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black uppercase shadow-2xs">
-                            SGK Tiếng Việt
-                          </span>
-                        </div>
-                        <p className="text-xs text-purple-100 font-medium mt-0.5">
-                          Tập hợp các tác phẩm thơ ca, đoạn văn miêu tả SGK Lớp 3, Lớp 4, Lớp 5. Giáo viên có thể phân quyền giao bài trực tiếp hoặc mở chế độ cho học sinh tự do luyện tập ngoài giờ.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleStartCreateNew(true)}
-                        className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs shadow-md transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
+                      </label>
+                      <select
+                        value={sortBy}
+                        onChange={(e: any) => setSortBy(e.target.value)}
+                        aria-label="Sắp xếp"
+                        className="h-9 px-3 rounded-full bg-white border border-slate-300 text-sm font-semibold text-slate-700 cursor-pointer"
                       >
-                        <Plus className="w-4 h-4" />
-                        <span>+ Soạn Bài Thơ / Văn Mới</span>
-                      </button>
+                        <option value="hierarchy">Theo lớp 3 → 5</option>
+                        <option value="assigned_first">Bài đang giao lên đầu</option>
+                        <option value="poems_first">Thơ & văn SGK lên đầu</option>
+                        <option value="title_az">Tên bài A → Z</option>
+                        <option value="wpm_asc">Tốc độ tăng dần</option>
+                      </select>
                     </div>
                   </div>
 
-                  {/* Bộ Lọc & Tìm Kiếm Chuyên Đề Thơ Văn */}
-                  <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3 flex-wrap text-xs shadow-2xs">
-                    {/* Lọc khối lớp */}
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="font-black text-slate-600">Khối lớp:</span>
-                      {[
-                        { label: 'Tất cả lớp', val: 'all' as const },
-                        { label: 'Lớp 3', val: 3 },
-                        { label: 'Lớp 4', val: 4 },
-                        { label: 'Lớp 5', val: 5 },
-                      ].map((item) => (
-                        <button
-                          key={String(item.val)}
-                          type="button"
-                          onClick={() => setPoemGradeFilter(item.val)}
-                          className={`px-2.5 py-1 rounded-lg font-black transition-all cursor-pointer ${
-                            poemGradeFilter === item.val
-                              ? 'bg-purple-600 text-white shadow-xs'
-                              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
+                  {/* Bảng: đầu cột (màn rộng) + các dòng; "Tất cả" + sắp xếp theo lớp thì chia nhóm */}
+                  <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                    <div className="hidden xl:grid grid-cols-[64px_1fr_96px_80px_150px_auto] gap-x-3 px-3 py-2 bg-slate-100 text-xs font-black text-slate-600 uppercase tracking-wide">
+                      <span>Lớp</span>
+                      <span>Tên bài · nội dung</span>
+                      <span>Loại</span>
+                      <span>Tốc độ</span>
+                      <span>Trạng thái</span>
+                      <span className="text-right pr-1">Thao tác</span>
                     </div>
-
-                    {/* Lọc thể loại */}
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="font-black text-slate-600">Thể loại &amp; Quyền:</span>
-                      {[
-                        { label: 'Tất cả', val: 'all' as const },
-                        { label: '📜 Bài Thơ', val: 'poem' as const },
-                        { label: '📝 Đoạn Văn Xuôi', val: 'prose' as const },
-                        { label: '🎯 Đang Giao Bài', val: 'assigned' as const },
-                        { label: '🔓 Tự Do Ngoài Giờ', val: 'free' as const },
-                      ].map((item) => (
-                        <button
-                          key={item.val}
-                          type="button"
-                          onClick={() => setPoemGenreFilter(item.val)}
-                          className={`px-2.5 py-1 rounded-lg font-black transition-all cursor-pointer ${
-                            poemGenreFilter === item.val
-                              ? 'bg-indigo-600 text-white shadow-xs'
-                              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Search Input */}
-                    <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-xl border border-slate-300 w-full sm:w-60">
-                      <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <input
-                        type="text"
-                        value={poemSearchKeyword}
-                        onChange={(e) => setPoemSearchKeyword(e.target.value)}
-                        placeholder="Tìm bài thơ, đoạn văn SGK..."
-                        className="w-full text-xs bg-transparent focus:outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Lưới hiển thị bài thơ & văn học SGK */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs text-slate-600 font-bold px-1">
-                      <span>Đang có {filteredPoemLessons.length} bài thơ, văn SGK trong chuyên đề</span>
-                      <span className="text-purple-700 font-black">
-                        💡 Thầy/Cô có thể bấm biểu tượng 🔓/🔒 để nhanh chóng mở tự do hoặc khóa chế độ luyện tập ngoài giờ
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-3.5">
-                      {filteredPoemLessons.map((poem) => renderLessonCard(poem))}
-                    </div>
+                    {gradeFilter === 'all' && sortBy === 'hierarchy' && !searchKeyword.trim() ? (
+                      groupedManageLessons.map((group) =>
+                        !group || group.lessons.length === 0 ? null : (
+                          <section key={group.id} aria-label={group.badge}>
+                            <h4 className={`px-3 py-1.5 text-xs font-black uppercase tracking-wide border-y border-slate-200 ${group.id === 'group-assigned' ? 'bg-rose-50 text-rose-800' : 'bg-slate-50 text-slate-700'}`}>
+                              {group.id === 'group-assigned' ? '🎯 Đang giao cho học sinh' : group.badge} · {group.lessons.length} bài
+                            </h4>
+                            <ul>{group.lessons.map((lesson) => renderLessonRow(lesson))}</ul>
+                          </section>
+                        )
+                      )
+                    ) : filteredManageLessons.length > 0 ? (
+                      <ul>{filteredManageLessons.map((lesson) => renderLessonRow(lesson))}</ul>
+                    ) : (
+                      <p className="p-6 text-center text-sm text-slate-500">Không có bài nào khớp bộ lọc hoặc từ khoá.</p>
+                    )}
                   </div>
                 </div>
               )}
@@ -1751,7 +1719,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                         <button
                           type="button"
                           disabled={isAnalyzingImage}
-                          onClick={handleAnalyzeImageWithAI}
+                          onClick={() => void handleAnalyzeImageWithAI()}
                           className={`
                             px-4 py-2 rounded-xl font-black text-xs sm:text-sm flex items-center gap-2 shadow-md transition-all cursor-pointer border-b-2 active:border-b-0
                             ${
@@ -1808,13 +1776,20 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                         </div>
 
                         <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={imageUrl}
-                            onChange={(e) => setImageUrl(e.target.value)}
-                            placeholder="Hoặc dán đường dẫn (URL) ảnh SGK vào đây..."
-                            className="flex-1 px-3 py-2 rounded-xl bg-white border border-slate-300 text-slate-800 text-xs focus:outline-none focus:border-sky-500"
-                          />
+                          {imageUrl.startsWith('data:') ? (
+                            // Ảnh tải từ máy là chuỗi base64 rất dài: chỉ báo ngắn gọn thay vì hiện cả chuỗi
+                            <span className="flex-1 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold">
+                              ✓ Đã tải ảnh từ máy ({Math.round((imageUrl.length * 3) / 4 / 1024)} KB)
+                            </span>
+                          ) : (
+                            <input
+                              type="text"
+                              value={imageUrl}
+                              onChange={(e) => setImageUrl(e.target.value)}
+                              placeholder="Hoặc dán đường dẫn (URL) ảnh SGK vào đây..."
+                              className="flex-1 px-3 py-2 rounded-xl bg-white border border-slate-300 text-slate-800 text-xs focus:outline-none focus:border-sky-500"
+                            />
+                          )}
                           {imageUrl && (
                             <button
                               type="button"
@@ -1836,8 +1811,10 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                               alt="Ảnh SGK"
                               className="w-full h-24 object-contain bg-slate-50"
                             />
-                            <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-[10px] text-white font-bold">
-                              Ảnh bài học
+                            {/* Lớp phủ không nhận chuột (pointer-events-none) để chuột phải trúng ẢNH:
+                                Chrome mới hiện mục "Tìm kiếm hình ảnh bằng Google Ống kính" */}
+                            <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-slate-950/60 text-[10px] text-white font-bold text-center py-0.5">
+                              Chuột phải vào ảnh
                             </div>
                           </div>
                         ) : (
@@ -1848,6 +1825,98 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                         )}
                       </div>
                     </div>
+
+                    {/* HỘP NHẬP KHOÁ GEMINI: chỉ hiện khi bấm Phân tích mà máy chủ và cô đều chưa có khoá */}
+                    {showKeyDialog && (
+                      <div data-testid="gemini-key-dialog" className="p-3 rounded-xl bg-white border-2 border-indigo-300 space-y-2">
+                        <p className="text-sm font-black text-indigo-900">🔑 Nhập khoá Gemini để AI đọc chữ trong ảnh</p>
+                        <ol className="text-xs text-slate-700 list-decimal pl-5 space-y-0.5">
+                          <li>Bấm <strong>Mở trang lấy khoá</strong>, đăng nhập Gmail, chọn <em>Create API key</em> (miễn phí).</li>
+                          <li>Bấm biểu tượng sao chép khoá, quay lại đây dán vào ô bên dưới.</li>
+                        </ol>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <a
+                            href={GEMINI_KEY_PAGE}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="h-10 px-3 rounded-full bg-indigo-50 border border-indigo-300 text-indigo-800 text-sm font-bold flex items-center"
+                          >
+                            Mở trang lấy khoá ↗
+                          </a>
+                          <input
+                            type="password"
+                            value={keyDraft}
+                            onChange={(e) => {
+                              setKeyDraft(e.target.value);
+                              setKeyDialogError('');
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleSubmitKey();
+                              }
+                            }}
+                            placeholder="Dán khoá (AIza… hoặc AQ.…) vào đây"
+                            aria-label="Khoá Gemini"
+                            autoComplete="off"
+                            autoFocus
+                            className="flex-1 min-w-[220px] h-10 px-3 rounded-xl border-2 border-slate-300 text-sm focus:outline-none focus:border-indigo-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleSubmitKey}
+                            className="h-10 px-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold cursor-pointer"
+                          >
+                            Lưu &amp; phân tích
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowKeyDialog(false)}
+                            className="h-10 px-3 rounded-full text-slate-600 hover:bg-slate-100 text-sm font-semibold cursor-pointer"
+                          >
+                            Huỷ
+                          </button>
+                        </div>
+                        <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none">
+                          <input type="checkbox" checked={rememberKey} onChange={(e) => setRememberKey(e.target.checked)} className="w-4 h-4" />
+                          Nhớ khoá trên máy này (bỏ chọn nếu là máy dùng chung với học sinh)
+                        </label>
+                        {keyDialogError && <p className="text-xs font-bold text-rose-700">{keyDialogError}</p>}
+                      </div>
+                    )}
+
+                    {geminiKey && aiReady !== true && !showKeyDialog && (
+                      <p className="text-xs text-slate-600">
+                        🔑 Đang dùng khoá Gemini cô đã nhập.{' '}
+                        <button type="button" onClick={forgetGeminiKey} className="font-bold text-rose-700 hover:underline cursor-pointer">
+                          Xoá khoá khỏi máy này
+                        </button>
+                      </p>
+                    )}
+
+                    {/* CÁCH KHÔNG CẦN KHOÁ: Google Ống kính của Chrome */}
+                    {imageUrl && (
+                      <div data-testid="lens-helper" className="p-2.5 rounded-xl bg-white/80 border border-slate-200 text-xs text-slate-700 flex flex-wrap items-center gap-2">
+                        <span className="font-bold text-slate-800">Không cần khoá:</span>
+                        <span>chuột phải vào ảnh → <em>Tìm kiếm hình ảnh bằng Google Ống kính</em> → <em>Văn bản</em> → <em>Sao chép</em>, rồi bấm</span>
+                        <button
+                          type="button"
+                          onClick={() => void handlePasteText()}
+                          className="h-8 px-3 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer"
+                        >
+                          Dán văn bản đã chép
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleOpenImageInNewTab()}
+                          className="h-8 px-3 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold cursor-pointer"
+                          title="Mở ảnh to bằng trình duyệt (Chrome/Edge) để chuột phải dùng Google Ống kính"
+                        >
+                          Mở ảnh to ở thẻ trình duyệt
+                        </button>
+                        {pasteHint && <span className="w-full font-semibold text-emerald-800">{pasteHint}</span>}
+                      </div>
+                    )}
 
                     {/* OCR Message feedback */}
                     {ocrSuccessMsg && (
@@ -1972,6 +2041,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                     </div>
 
                     <textarea
+                      ref={contentTextareaRef}
                       rows={7}
                       value={text}
                       onChange={(e) => setText(e.target.value)}
@@ -2007,7 +2077,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                         type="text"
                         value={teacherName}
                         onChange={(e) => setTeacherName(e.target.value)}
-                        placeholder="Cô Mai"
+                        placeholder={DEFAULT_TEACHER_NAME}
                         className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-300 text-slate-900 text-xs font-bold focus:outline-none focus:border-emerald-500"
                       />
                     </div>
@@ -2112,7 +2182,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                   <div className="space-y-2">
                     <div className="flex items-center justify-between flex-wrap gap-2">
                       <label className="text-xs font-black text-slate-800 uppercase tracking-wider">
-                        2. Chọn các bài học muốn giao ({selectedLessonIdsForAssign.length} bài đã chọn):
+                        2. Chọn các bài học muốn giao ({validSelectedLessonIds.length} bài đã chọn):
                       </label>
 
                       {/* Quick preset buttons */}
@@ -2158,12 +2228,12 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                     </div>
 
                     {/* Chips of currently selected lessons */}
-                    {selectedLessonIdsForAssign.length > 0 && (
+                    {validSelectedLessonIds.length > 0 && (
                       <div className="p-2 rounded-xl bg-emerald-50/80 border border-emerald-200 flex flex-wrap gap-1.5 items-center">
                         <span className="text-[11px] font-black text-emerald-900 shrink-0">
-                          Đã chọn ({selectedLessonIdsForAssign.length}):
+                          Đã chọn ({validSelectedLessonIds.length}):
                         </span>
-                        {selectedLessonIdsForAssign.map((id, sIdx) => {
+                        {validSelectedLessonIds.map((id, sIdx) => {
                           const item = effectiveLessons.find((l) => l.id === id);
                           if (!item) return null;
                           return (
@@ -2324,11 +2394,66 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                   >
                     <Send className="w-4 h-4" />
                     <span>
-                      Xác Nhận Giao {selectedLessonIdsForAssign.length} Bài Tập Cho Khối Lớp {selectedGradeForAssign}
+                      Xác Nhận Giao {validSelectedLessonIds.length} Bài Tập Cho Khối Lớp {selectedGradeForAssign}
                     </span>
                   </button>
                 </form>
               )}
+
+              {activeTab === 'backup' && (
+                <div className="space-y-3 max-w-4xl">
+                  <h3 className="text-lg font-black text-slate-900">Sao lưu &amp; đồng bộ</h3>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    {[
+                      {
+                        key: 'export',
+                        icon: <Download className="w-6 h-6 text-blue-600" />,
+                        title: 'Xuất file ra USB',
+                        desc: `Lưu ${effectiveLessons.length} bài học và bài đang giao thành một file .json để chép sang máy học sinh không có mạng.`,
+                        btn: 'Tải file sao lưu',
+                        onClick: handleExportLessonsToUSB,
+                        cls: 'bg-blue-600 hover:bg-blue-500',
+                      },
+                      {
+                        key: 'import',
+                        icon: <HardDrive className="w-6 h-6 text-violet-600" />,
+                        title: 'Nạp từ USB',
+                        desc: 'Chọn file .json đã xuất để đưa bài học vào máy này. Bài lỗi hoặc trùng mã sẽ tự bỏ qua.',
+                        btn: 'Chọn file để nạp',
+                        onClick: () => fileInputRef.current?.click(),
+                        cls: 'bg-violet-600 hover:bg-violet-500',
+                      },
+                      {
+                        key: 'cloud',
+                        icon: <Upload className="w-6 h-6 text-emerald-600" />,
+                        title: 'Đồng bộ lên Cloud',
+                        desc: 'Đưa toàn bộ bài học và ảnh SGK lên Supabase để các máy có mạng cùng nhận bài mới nhất.',
+                        btn: isSyncingAllToSupabase ? 'Đang đồng bộ…' : 'Đồng bộ ngay',
+                        onClick: handleSyncAllToSupabase,
+                        cls: 'bg-emerald-600 hover:bg-emerald-500',
+                      },
+                    ].map((c) => (
+                      <div key={c.key} data-backup-card={c.key} className="p-4 rounded-2xl border border-slate-200 bg-white flex flex-col gap-2">
+                        <div className="flex items-center gap-2">
+                          {c.icon}
+                          <h4 className="font-black text-base text-slate-900">{c.title}</h4>
+                        </div>
+                        <p className="text-sm text-slate-600 flex-1">{c.desc}</p>
+                        <button
+                          type="button"
+                          onClick={c.onClick}
+                          disabled={c.key === 'cloud' && isSyncingAllToSupabase}
+                          className={`min-h-[44px] px-4 rounded-full text-white font-bold text-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 ${c.cls}`}
+                        >
+                          {c.key === 'cloud' && isSyncingAllToSupabase && <Loader2 className="w-4 h-4 animate-spin" />}
+                          {c.btn}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
             </div>
           </div>
         )}

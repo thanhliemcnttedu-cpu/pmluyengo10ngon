@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Lesson, GradeAssignment } from '../types/typing';
-import { DEFAULT_BOOK_COVER, STATIC_DEFAULT_COVER, createFallbackCoverSvg } from '../utils/imageUtils';
+import { DEFAULT_BOOK_COVER, STATIC_DEFAULT_COVER, createFallbackCoverSvg, resolvePublicAssetUrl } from '../utils/imageUtils';
 import {
   Maximize2,
   Image as ImageIcon,
@@ -91,7 +91,7 @@ export const TextbookImageViewer: React.FC<TextbookImageViewerProps> = ({
   const rawImageUrl = imageUrl || lesson?.imageUrl;
   const getInitialImage = () => {
     if (rawImageUrl && rawImageUrl.trim() && !rawImageUrl.startsWith('/src/')) {
-      return rawImageUrl;
+      return resolvePublicAssetUrl(rawImageUrl);
     }
     return STATIC_DEFAULT_COVER || DEFAULT_BOOK_COVER;
   };
@@ -103,8 +103,9 @@ export const TextbookImageViewer: React.FC<TextbookImageViewerProps> = ({
   }, [rawImageUrl, lesson?.id]);
 
   const handleImageError = () => {
-    if (activeImageSrc !== STATIC_DEFAULT_COVER && activeImageSrc !== DEFAULT_BOOK_COVER) {
-      setActiveImageSrc(DEFAULT_BOOK_COVER || STATIC_DEFAULT_COVER);
+    // Thứ tự dự phòng: ảnh gốc/ảnh public -> ảnh đóng gói sẵn (luôn có trong bundle) -> SVG
+    if (activeImageSrc !== DEFAULT_BOOK_COVER) {
+      setActiveImageSrc(DEFAULT_BOOK_COVER);
     } else {
       setActiveImageSrc(createFallbackCoverSvg(lessonTitle, lesson?.gradeLevel || selectedGrade));
     }
@@ -127,9 +128,10 @@ export const TextbookImageViewer: React.FC<TextbookImageViewerProps> = ({
       // Text search
       if (curriculumSearch.trim()) {
         const query = curriculumSearch.toLowerCase();
-        const matchTitle = l.title.toLowerCase().includes(query);
-        const matchCategory = l.categoryTitleVi.toLowerCase().includes(query);
-        const matchText = l.text.toLowerCase().includes(query);
+        // Dữ liệu từ Supabase/USB có thể thiếu trường -> tránh gọi toLowerCase trên undefined
+        const matchTitle = (l.title ?? '').toLowerCase().includes(query);
+        const matchCategory = (l.categoryTitleVi ?? '').toLowerCase().includes(query);
+        const matchText = (l.text ?? '').toLowerCase().includes(query);
         return matchTitle || matchCategory || matchText;
       }
       return true;
@@ -419,7 +421,10 @@ export const TextbookImageViewer: React.FC<TextbookImageViewerProps> = ({
                 {filteredCurriculumLessons.map((item) => {
                   const isCurrent = lesson?.id === item.id;
                   const record = completedLessons[item.id];
-                  const isItemAssigned = currentGradeHomework?.lessonId === item.id;
+                  // Giao nhiều bài: phải xét cả lessonIds, không chỉ bài đầu tiên
+                  const isItemAssigned =
+                    currentGradeHomework?.lessonId === item.id ||
+                    (Array.isArray(currentGradeHomework?.lessonIds) && currentGradeHomework.lessonIds.includes(item.id));
 
                   return (
                     <div
@@ -677,8 +682,8 @@ export const TextbookImageViewer: React.FC<TextbookImageViewerProps> = ({
 
               {/* Statistics for reading */}
               <div className="p-2 rounded-xl bg-white border border-slate-200 flex items-center justify-between text-[11px] text-slate-600 font-bold">
-                <span>Số từ: {lesson?.text.trim().split(/\s+/).length || 0} từ</span>
-                <span>Số ký tự: {lesson?.text.length || 0} ký tự</span>
+                <span>Số từ: {(lesson?.text ?? '').trim() ? (lesson?.text ?? '').trim().split(/\s+/).length : 0} từ</span>
+                <span>Số ký tự: {(lesson?.text ?? '').length} ký tự</span>
                 <span className="text-emerald-700">Mục tiêu: {lesson?.targetWpm || 15} WPM</span>
               </div>
             </div>

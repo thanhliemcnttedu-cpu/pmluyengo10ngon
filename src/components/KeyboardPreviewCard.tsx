@@ -136,7 +136,7 @@ export const KeyboardPreviewCard: React.FC<KeyboardPreviewCardProps> = ({
             fontSize="7.5"
             fontWeight="bold"
             letterSpacing="0.5"
-            fontFamily="monospace"
+            fontFamily="'Be Vietnam Pro', system-ui, sans-serif"
           >
             {theme.brandTag}
           </text>

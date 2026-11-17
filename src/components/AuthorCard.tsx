@@ -1,18 +1,51 @@
 import React, { useState } from 'react';
 import { Coffee, Phone, MessageCircle, Copy, Check, Building2, CreditCard } from 'lucide-react';
 
+// Sao chép an toàn: trên http qua mạng LAN, navigator.clipboard có thể không tồn tại,
+// nên dùng textarea + execCommand('copy') làm dự phòng.
+const copyTextSafely = async (text: string): Promise<boolean> => {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Bị chặn quyền: thử cách dự phòng bên dưới
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+};
+
 interface AuthorCardProps {
   onOpenDonateModal: () => void;
 }
 
 export const AuthorCard: React.FC<AuthorCardProps> = ({ onOpenDonateModal }) => {
   const [copiedStk, setCopiedStk] = useState<boolean>(false);
+  const [copyFailed, setCopyFailed] = useState<boolean>(false);
 
-  const handleCopyStk = (e: React.MouseEvent) => {
+  const handleCopyStk = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText('0977058363');
-    setCopiedStk(true);
-    setTimeout(() => setCopiedStk(false), 2000);
+    const ok = await copyTextSafely('0977058363');
+    // Báo rõ khi chép thất bại để không tưởng đã chép.
+    setCopiedStk(ok);
+    setCopyFailed(!ok);
+    setTimeout(() => {
+      setCopiedStk(false);
+      setCopyFailed(false);
+    }, 2000);
   };
 
   return (
@@ -100,9 +133,11 @@ export const AuthorCard: React.FC<AuthorCardProps> = ({ onOpenDonateModal }) => 
               type="button"
               onClick={handleCopyStk}
               className="p-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
-              title="Sao chép số tài khoản BIDV"
+              title={copyFailed ? 'Không sao chép được, hãy chép tay' : 'Sao chép số tài khoản BIDV'}
             >
-              {copiedStk ? (
+              {copyFailed ? (
+                <span className="text-[9px] font-black text-rose-600 px-0.5">Chép tay</span>
+              ) : copiedStk ? (
                 <Check className="w-2.5 h-2.5 text-emerald-600" />
               ) : (
                 <Copy className="w-2.5 h-2.5" />

@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
 import { soundEngine } from '../utils/audio';
+import { GameIcon } from './GameIcon';
+import { wordPicture } from '../data/wordPictures';
 import confetti from 'canvas-confetti';
 import {
   Trophy,
@@ -198,32 +200,32 @@ const LEVEL_NAMES: Record<number, { title: string; subtitle: string; descVi: str
   1: {
     title: 'Level 1: Nhập Cuộc',
     subtitle: 'Khởi đầu vững chắc',
-    descVi: 'Tối đa 50s/lượt • Từ đơn 1 tiếng (bút, bàn, mèo, hoa, mẹ...). Rèn vị trí phím cơ bản.',
-    timeLimit: 50,
+    descVi: 'Tối đa 110s/lượt • Từ đơn 1 tiếng (bút, bàn, mèo, hoa, mẹ...). Rèn vị trí phím cơ bản.',
+    timeLimit: LEVEL_TIME_LIMITS[1],
   },
   2: {
     title: 'Level 2: Tăng Tốc',
     subtitle: 'Nhanh nhẹn & linh hoạt',
-    descVi: 'Tối đa 40s/lượt • Cụm từ 2 đến 3 từ (thước kẻ, gia đình vui vẻ, máy tính thông minh...).',
-    timeLimit: 40,
+    descVi: 'Tối đa 100s/lượt • Cụm từ 2 đến 3 từ (thước kẻ, gia đình vui vẻ, máy tính thông minh...).',
+    timeLimit: LEVEL_TIME_LIMITS[2],
   },
   3: {
     title: 'Level 3: Mở Rộng',
     subtitle: 'Chinh phục câu ngắn',
-    descVi: 'Tối đa 35s/lượt • Câu ngắn có độ dài 4 đến 6 từ (chăm ngoan học giỏi mỗi ngày...).',
-    timeLimit: 35,
+    descVi: 'Tối đa 95s/lượt • Câu ngắn có độ dài 4 đến 6 từ (chăm ngoan học giỏi mỗi ngày...).',
+    timeLimit: LEVEL_TIME_LIMITS[3],
   },
   4: {
     title: 'Level 4: Tinh Thông',
     subtitle: 'Câu hoàn chỉnh',
-    descVi: 'Tối đa 30s/lượt • Câu hoàn chỉnh 4 đến 7 từ (cô giáo như người mẹ hiền thứ hai...).',
-    timeLimit: 30,
+    descVi: 'Tối đa 90s/lượt • Câu hoàn chỉnh 4 đến 7 từ (cô giáo như người mẹ hiền thứ hai...).',
+    timeLimit: LEVEL_TIME_LIMITS[4],
   },
   5: {
     title: 'Level 5: Đỉnh Cao',
     subtitle: 'Vô địch toàn năng',
-    descVi: 'Tối đa 25s/lượt • Câu linh hoạt 3 đến 8 từ. Đòi hỏi phản xạ gõ phím nhanh và chính xác cao!',
-    timeLimit: 25,
+    descVi: 'Tối đa 85s/lượt • Câu linh hoạt 3 đến 8 từ. Đòi hỏi phản xạ gõ phím nhanh và chính xác cao!',
+    timeLimit: LEVEL_TIME_LIMITS[5],
   },
 };
 
@@ -455,6 +457,11 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
   };
 
   const handleApplyModeAndClose = (mode: GameTypingMode, sub: VietnameseSubMode) => {
+    // Đang chơi mà đổi chế độ thì phải chơi lại với bộ từ mới, nếu không bộ từ cũ vẫn dùng sai chế độ.
+    if (isPlaying) {
+      handleConfirmModeAndStartGame(mode, sub);
+      return;
+    }
     setGameMode(mode);
     setVnSubMode(sub);
     localStorage.setItem('typing_kids_game_mode', mode);
@@ -570,9 +577,9 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
   const wordDeckRef = useRef<SmartWordDeck | null>(null);
 
   // Chuẩn hóa thời gian đếm ngược từng lượt gõ theo yêu cầu:
-  // Level 1: 50s | Level 2: 40s | Level 3: 35s | Level 4: 30s | Level 5: 25s
-  const [wordTimeLeft, setWordTimeLeft] = useState<number>(50);
-  const [totalWordTime, setTotalWordTime] = useState<number>(50);
+  // Thời gian mỗi lượt lấy từ LEVEL_TIME_LIMITS (110/100/95/90/85 giây)
+  const [wordTimeLeft, setWordTimeLeft] = useState<number>(LEVEL_TIME_LIMITS[1]);
+  const [totalWordTime, setTotalWordTime] = useState<number>(LEVEL_TIME_LIMITS[1]);
 
   // TRẠNG THÁI HẾT GIỜ QUY ĐỊNH CHO TỪ HIỆN TẠI:
   // Nếu hết thời gian quy định, vẫn cho học sinh gõ tiếp đến cùng, nhưng sẽ nhận 0 điểm vì không kịp thời gian!
@@ -630,7 +637,7 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
     category: 'do_dung_hoc_tap',
     categoryLabelVi: 'Đồ dùng học tập',
   });
-  const [treasureTime, setTreasureTime] = useState<number>(50);
+  const [treasureTime, setTreasureTime] = useState<number>(LEVEL_TIME_LIMITS[1]);
 
   // 5. GAME 5: Siêu nhân giao hàng
   const [courierDistance, setCourierDistance] = useState<number>(0);
@@ -644,18 +651,79 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
 
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // MÀN HÌNH LỚN: phóng cả màn đang chơi (thanh điểm + hình + ô gõ) theo khung để chữ, hình to rõ.
+  // Cỡ gốc vừa khít ~1300x660 (màn 1366x768); lớn hơn thì phóng tối đa 1,45 lần, nhỏ hơn giữ nguyên.
+  const playAreaRef = useRef<HTMLDivElement>(null);
+  // Chỉ bản phát triển: mở thử hộp chúc mừng/vô địch để kiểm tra giao diện mà không cần chơi hết 15 lượt
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as any).__showGameResult = (kind: 'level' | 'champion' | 'none') => {
+      setIsLevelClearedModalOpen(kind === 'level');
+      setIsGrandChampionModalOpen(kind === 'champion');
+    };
+    return () => {
+      delete (window as any).__showGameResult;
+    };
+  }, []);
+  useLayoutEffect(() => {
+    if (!isPlaying) return;
+    const el = playAreaRef.current;
+    if (!el) return;
+    const fit = () => {
+      el.style.zoom = '1';
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (!w || !h) return;
+      const z = Math.min(1.45, w / 1300, h / 660);
+      el.style.zoom = z > 1.03 ? z.toFixed(3) : '1';
+    };
+    let raf = 0;
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(fit);
+    };
+    fit();
+    window.addEventListener('resize', schedule);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', schedule);
+      el.style.zoom = '1';
+    };
+  }, [isPlaying]);
+
+  // Chờ chấm từ (chế độ không dấu thông minh): Unikey gõ "hoc" rồi mới thêm dấu, chấm ngay sẽ làm rơi phím dấu sang từ sau.
+  const pendingCompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingCompleteRef = useRef<(() => void) | null>(null);
+  const completeWordRef = useRef<(val: string, targetWord: string) => void>(() => {});
+  const clearPendingComplete = () => {
+    if (pendingCompleteTimerRef.current) clearTimeout(pendingCompleteTimerRef.current);
+    pendingCompleteTimerRef.current = null;
+    pendingCompleteRef.current = null;
+  };
+
+  // Khi đóng hub phải trả lại trạng thái tiếng của ứng dụng, vì setMuted là toàn cục.
+  const soundEnabledRef = useRef(soundEnabled);
+  soundEnabledRef.current = soundEnabled;
+  useEffect(() => {
+    return () => {
+      if (pendingCompleteTimerRef.current) clearTimeout(pendingCompleteTimerRef.current);
+      soundEngine.setMuted(!soundEnabledRef.current);
+    };
+  }, []);
+
   // ==========================================================================
   // CHỨC NĂNG: HỌC SINH NHẤN ENTER TỰ ĐỘNG XÓA KÝ TỰ & CHUẨN BỊ GÕ TỪ MỚI (TỪ BỘ BÀI NGẪU NHIÊN)
   // ==========================================================================
   const handleSkipOrResetCurrentWord = useCallback(() => {
     if (!isPlaying || isGameOver || isLevelClearedModalOpen || isGrandChampionModalOpen) return;
 
+    clearPendingComplete();
     setCurrentTypedInput('');
     setInputHasError(false);
     setIsTimeExpiredForCurrentWord(false);
 
     // Chuẩn hóa thời gian đếm ngược theo Level
-    const limit = LEVEL_TIME_LIMITS[level] || 50;
+    const limit = LEVEL_TIME_LIMITS[level] || LEVEL_TIME_LIMITS[1];
     setWordTimeLeft(limit);
     setTotalWordTime(limit);
     soundEngine.playMechanicalClick();
@@ -705,14 +773,21 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
 
   // Tự động giữ focus vào ô gõ mọi lúc và bắt phím Enter toàn cục
   useEffect(() => {
-    if (!isPlaying || isGameOver || isLevelClearedModalOpen || isGrandChampionModalOpen) return;
+    // Mở menu chế độ / luật chơi thì không giành focus và không bắt Enter, để thao tác được trong modal.
+    if (!isPlaying || isGameOver || isLevelClearedModalOpen || isGrandChampionModalOpen || showModeModal || showInstructionModal) return;
 
     inputRef.current?.focus();
 
     const handleWindowKeyDown = (e: KeyboardEvent) => {
       // Khi nhấn phím Enter: Tự động xóa ký tự đã gõ để chuẩn bị gõ từ mới
+      // Đây là đường xử lý Enter duy nhất (ô gõ không gọi nữa) để không bị đổi từ hai lần.
       if (e.key === 'Enter') {
         e.preventDefault();
+        // Đang chờ chấm từ không dấu thì Enter là xác nhận, không phải bỏ qua từ.
+        if (pendingCompleteRef.current) {
+          pendingCompleteRef.current();
+          return;
+        }
         handleSkipOrResetCurrentWord();
         return;
       }
@@ -726,7 +801,7 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
     return () => {
       window.removeEventListener('keydown', handleWindowKeyDown);
     };
-  }, [isPlaying, isGameOver, isLevelClearedModalOpen, isGrandChampionModalOpen, handleSkipOrResetCurrentWord]);
+  }, [isPlaying, isGameOver, isLevelClearedModalOpen, isGrandChampionModalOpen, showModeModal, showInstructionModal, handleSkipOrResetCurrentWord]);
 
   // Tự động phát và dừng nhạc nền (BGM) vui nhộn trong suốt quá trình chơi game
   useEffect(() => {
@@ -805,6 +880,7 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
     activeMode: GameTypingMode = gameMode,
     activeSubMode: VietnameseSubMode = vnSubMode
   ) => {
+    clearPendingComplete();
     const maxUnlocked = getUnlockedLevelForGame(gameId, activeMode, activeSubMode);
     const validLevel = Math.min(selectedLvl, maxUnlocked);
 
@@ -830,8 +906,8 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
     wordDeckRef.current = new SmartWordDeck(activeMode, validLevel);
 
     // Chuẩn hóa thời gian đếm ngược theo Level (mỗi lượt gõ):
-    // Level 1: 50s | Level 2: 40s | Level 3: 35s | Level 4: 30s | Level 5: 25s
-    const timeLimit = LEVEL_TIME_LIMITS[validLevel] || 50;
+    // Thời gian mỗi lượt lấy từ LEVEL_TIME_LIMITS (110/100/95/90/85 giây)
+    const timeLimit = LEVEL_TIME_LIMITS[validLevel] || LEVEL_TIME_LIMITS[1];
     setWordTimeLeft(timeLimit);
     setTotalWordTime(timeLimit);
 
@@ -903,7 +979,8 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
   // HẾT GIỜ (0s) THÌ GIỮ NGUYÊN TỪ VÀ CHO GÕ TIẾP (0 ĐIỂM HOẶC ENTER ĐỔI TỪ)
   // ==========================================================================
   useEffect(() => {
-    if (!isPlaying || isGameOver || isLevelClearedModalOpen || isGrandChampionModalOpen) return;
+    // Tạm dừng đếm giờ khi mở menu chế độ / luật chơi để học sinh không bị mất thời gian.
+    if (!isPlaying || isGameOver || isLevelClearedModalOpen || isGrandChampionModalOpen || showModeModal || showInstructionModal) return;
 
     const interval = setInterval(() => {
       // 1. Đếm ngược thời gian lượt gõ hiện tại (chuẩn xác mỗi 100ms)
@@ -982,7 +1059,7 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
     }, 100);
 
     return () => clearInterval(interval);
-  }, [isPlaying, isGameOver, isLevelClearedModalOpen, isGrandChampionModalOpen, selectedGameId, level, gameMode, totalWordTime, wordTimeLeft]);
+  }, [isPlaying, isGameOver, isLevelClearedModalOpen, isGrandChampionModalOpen, showModeModal, showInstructionModal, selectedGameId, level, gameMode, totalWordTime, wordTimeLeft]);
 
   // ==========================================================================
   // XỬ LÝ NHẬP LIỆU THÔNG MINH (HỖ TRỢ UNIKEY [V], TIẾNG ANH & HẾT GIỜ 0 ĐIỂM)
@@ -990,7 +1067,9 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!isPlaying || isGameOver || isLevelClearedModalOpen || isGrandChampionModalOpen) return;
 
-    const val = e.target.value;
+    // Chuẩn hóa NFC: Unikey/IME có thể gửi dấu tổ hợp (NFD) làm so khớp với từ mục tiêu bị sai.
+    const val = e.target.value.normalize('NFC');
+    clearPendingComplete();
     setCurrentTypedInput(val);
     setTotalKeystrokes((k) => k + 1);
 
@@ -1005,13 +1084,42 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
     else if (selectedGameId === 'courier') targetWord = currentSignWordItem.word;
 
     // Kiểm tra tiền tố thông minh theo chế độ và phân nhánh
-    if (isPrefixMatchForMode(val, targetWord, gameMode, vnSubMode)) {
+    // Tính "đã trọn từ" trước: "hoc " (có dấu cách) không còn là tiền tố nhưng vẫn là từ hoàn chỉnh.
+    const isComplete = isWordCompleteForMode(val, targetWord, gameMode, vnSubMode);
+    if (isComplete || isPrefixMatchForMode(val, targetWord, gameMode, vnSubMode)) {
       setInputHasError(false);
       setCorrectKeystrokes((k) => k + 1);
       soundEngine.playMechanicalClick();
 
       // NẾU ĐÃ GÕ TRỌN VẸN TỪ MỤC TIÊU!
-      if (isWordCompleteForMode(val, targetWord, gameMode, vnSubMode)) {
+      if (isComplete) {
+        const normalizeForCompare = (str: string) => str.normalize('NFC').trim().toLowerCase().replace(/\s+/g, ' ');
+        const isExact = normalizeForCompare(val) === normalizeForCompare(targetWord);
+        // Chỉ khớp chữ cái gốc (chưa dấu) thì chờ Space/Enter hoặc 150ms ngừng gõ, để Unikey kịp thêm dấu.
+        const needsDebounce = gameMode === 'accented' && vnSubMode === 'smart_unaccented' && !isExact && !/\s$/.test(val);
+        if (needsDebounce) {
+          const run = () => {
+            clearPendingComplete();
+            completeWordRef.current(val, targetWord);
+          };
+          pendingCompleteRef.current = run;
+          pendingCompleteTimerRef.current = setTimeout(run, 150);
+          return;
+        }
+        completeWord(val, targetWord);
+      }
+    } else {
+      // Gõ không khớp
+      setInputHasError(true);
+      soundEngine.playErrorBoop();
+      setCombo(0);
+    }
+  };
+
+  // Chấm một từ đã gõ xong: cộng điểm, bốc từ mới, kiểm tra qua level
+  const completeWord = (val: string, targetWord: string) => {
+    {
+      {
         soundEngine.playBubblePop();
         setCurrentTypedInput('');
 
@@ -1045,12 +1153,11 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
             showEncouragement('⏰ Hoàn thành từ (0 điểm vì hết thời gian quy định) • Cố gắng từ tiếp theo nhé!');
           } else {
             setScore((s) => s + basePoints * level);
-            setCombo((c) => {
-              const nextC = c + 1;
-              setMaxCombo((m) => Math.max(m, nextC));
-              if (nextC % 3 === 0) showEncouragement(successText);
-              return nextC;
-            });
+            // Tính ngoài updater: updater phải thuần, StrictMode gọi 2 lần sẽ hiện lời khen/phát âm 2 lần.
+            const nextC = combo + 1;
+            setCombo(nextC);
+            setMaxCombo((m) => Math.max(m, nextC));
+            if (nextC % 3 === 0) showEncouragement(successText);
           }
           // Reset cờ hết giờ cho từ tiếp theo
           setIsTimeExpiredForCurrentWord(false);
@@ -1067,8 +1174,8 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
         }
 
         // Chuẩn hóa thời gian đếm ngược lượt gõ cho từ tiếp theo:
-        // Level 1: 50s | Level 2: 40s | Level 3: 35s | Level 4: 30s | Level 5: 25s
-        const nextTimeLimit = LEVEL_TIME_LIMITS[level] || 50;
+        // Thời gian mỗi lượt lấy từ LEVEL_TIME_LIMITS (110/100/95/90/85 giây)
+        const nextTimeLimit = LEVEL_TIME_LIMITS[level] || LEVEL_TIME_LIMITS[1];
         setWordTimeLeft(nextTimeLimit);
         setTotalWordTime(nextTimeLimit);
         setIsTimeExpiredForCurrentWord(false);
@@ -1143,19 +1250,16 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
           setCurrentSignWordItem(getNextWord());
         }
       }
-    } else {
-      // Gõ không khớp
-      setInputHasError(true);
-      soundEngine.playErrorBoop();
-      setCombo(0);
     }
   };
+  // Hẹn giờ chờ gọi qua ref để luôn dùng state mới nhất, tránh closure cũ sau 150ms.
+  completeWordRef.current = completeWord;
 
   // Xử lý phím Enter trên ô gõ
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
+      // Chỉ chặn mặc định; đổi từ do listener Enter trên window xử lý, gọi thêm ở đây sẽ đổi từ 2 lần.
       e.preventDefault();
-      handleSkipOrResetCurrentWord();
     }
   };
 
@@ -1170,6 +1274,21 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
   const currentLevelGoal = LEVEL_GOALS[level] || LEVEL_GOALS[1];
 
   // Helper render từ vựng với các ký tự đã gõ tô sáng (hỗ trợ cả gõ có dấu chuẩn Telex/VNI lẫn gõ không dấu thông minh)
+  // Từ cần gõ kèm HÌNH MINH HỌA đúng nghĩa (fish -> 🐟, ghế -> 🪑) để học sinh hiểu từ mình đang gõ
+  const renderWordWithPicture = (item: GameWordItem, typed: string) => (
+    <div className="flex items-center justify-center gap-4 sm:gap-6">
+      <span
+        data-testid="word-picture"
+        className="shrink-0 w-20 h-20 sm:w-24 sm:h-24 rounded-3xl bg-white border-4 border-amber-300 shadow-md flex items-center justify-center text-5xl sm:text-6xl leading-none select-none"
+        role="img"
+        aria-label={`Hình minh họa: ${item.word}`}
+      >
+        {wordPicture(item)}
+      </span>
+      {renderWordWithHighlight(item.word, typed)}
+    </div>
+  );
+
   const renderWordWithHighlight = (word: string, typed: string) => {
     const isStandardAccented = gameMode === 'accented' && vnSubMode === 'standard_accented';
     const composed = isStandardAccented ? composeVietnamesePhrase(typed) : typed;
@@ -1224,7 +1343,7 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 select-none animate-in fade-in duration-200">
-      <div className="bg-gradient-to-b from-[#fffdfa] via-[#f2fbf5] to-[#fef6ee] border-4 border-emerald-400 rounded-3xl w-[96vw] max-w-6xl h-[95vh] max-h-[890px] shadow-2xl shadow-emerald-950/20 flex flex-col overflow-hidden text-slate-800 relative">
+      <div className="bg-gradient-to-b from-[#fffdfa] via-[#f2fbf5] to-[#fef6ee] border-4 border-emerald-400 rounded-3xl w-[97vw] max-w-[1720px] h-[96vh] shadow-2xl shadow-emerald-950/20 flex flex-col overflow-hidden text-slate-800 relative">
         
         {/* ==================================================================== */}
         {/* THANH ĐIỀU HƯỚNG TRÊN CÙNG: LOGO, NÚT MENU NỔI CHẾ ĐỘ, ÂM THANH & ĐÓNG */}
@@ -1248,26 +1367,6 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* NÚT MENU NỔI TÙY CHỌN CHẾ ĐỘ GÕ (POPUP MODAL TRIGGER) */}
-            <button
-              type="button"
-              onClick={() => setShowModeModal(true)}
-              className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-white hover:bg-amber-50 text-slate-800 text-xs font-black transition-all border-2 border-amber-300 shadow-xs cursor-pointer flex items-center gap-1.5 hover:scale-105 active:scale-95 ring-2 ring-amber-200/50"
-              title="Bấm để mở Menu Nổi: Tùy chọn ngôn ngữ (Tiếng Việt / Tiếng Anh) & phân nhánh độ khó"
-            >
-              <span className="text-sm">{gameMode === 'accented' ? '🇻🇳' : '🇬🇧'}</span>
-              <span className="font-extrabold text-[11px] sm:text-xs">
-                {gameMode === 'accented'
-                  ? vnSubMode === 'smart_unaccented'
-                    ? 'VN Không Dấu'
-                    : 'VN Có Dấu'
-                  : 'Tiếng Anh'}
-              </span>
-              <span className="text-[9px] bg-gradient-to-r from-amber-500 to-orange-500 text-white px-1.5 py-0.2 rounded-md font-black shadow-2xs">
-                Đổi ⚙️
-              </span>
-            </button>
-
             {/* Nút Xem Hướng Dẫn Gõ Tiếng Việt */}
             <button
               type="button"
@@ -1276,7 +1375,7 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
               title="Xem hướng dẫn chi tiết quy tắc gõ tiếng Việt cho cả 2 chế độ"
             >
               <HelpCircle className="w-3.5 h-3.5 text-amber-600" />
-              <span className="hidden md:inline">Luật Chơi</span>
+              <span className="hidden sm:inline">Luật chơi</span>
             </button>
 
             {/* Nút bật/tắt âm thanh */}
@@ -1311,76 +1410,14 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
           // ==========================================
           // MÀN HÌNH CHỌN 5 TRÒ CHƠI & LỘ TRÌNH 5 LEVEL (TỐI ƯU HÓA KHÔNG GIAN, KHÔNG CUỘN)
           // ==========================================
-          <div className="flex-1 p-3 sm:p-4 flex flex-col justify-between gap-2.5 overflow-hidden">
-            
-            {/* 1. THANH QUY TẮC THI ĐẤU & CHẾ ĐỘ GÕ (COMPACT HEADER BAR) */}
-            <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-amber-50 border-2 border-emerald-300 rounded-2xl px-3.5 py-2 flex items-center justify-between gap-2.5 shadow-xs shrink-0">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-xl bg-amber-100 border border-amber-300 flex items-center justify-center text-lg shrink-0 shadow-2xs">
-                  🎯
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-black text-xs sm:text-sm text-slate-900 tracking-tight">
-                      QUY TẮC THI ĐẤU: VƯỢT QUA TUẦN TỰ LEVEL 1 ĐẾN LEVEL 5
-                    </span>
-                    <span className="text-[10px] bg-emerald-200 text-emerald-950 px-2 py-0.2 rounded-full font-black shrink-0">
-                      15 lượt / level
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-600 truncate hidden sm:block">
-                    Vượt qua 15 từ mỗi cấp độ để mở khóa cấp độ kế tiếp • Phá đảo Level 5 để giành cúp vô địch!
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                {/* Nút Menu Nổi Chế Độ Gõ */}
-                <button
-                  type="button"
-                  onClick={handleOpenModeModal}
-                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-amber-50 text-slate-800 text-xs font-black border-2 border-amber-300 shadow-xs cursor-pointer flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95 ring-2 ring-amber-200/50"
-                  title="Bấm để mở Menu Nổi: Tùy chọn Tiếng Việt / Tiếng Anh & Phân nhánh độ khó"
-                >
-                  <span className="text-sm">{gameMode === 'accented' ? '🇻🇳' : '🇬🇧'}</span>
-                  <span className="font-black text-xs text-amber-950">
-                    {gameMode === 'accented'
-                      ? vnSubMode === 'smart_unaccented'
-                        ? 'VN Không Dấu'
-                        : 'VN Có Dấu'
-                      : 'Tiếng Anh'}
-                  </span>
-                  <span className="text-[9px] bg-amber-500 text-white px-1.5 py-0.2 rounded-md font-black shadow-2xs">
-                    Đổi ⚙️
-                  </span>
-                </button>
-
-                {/* Chơi lại từ Level 1 */}
-                <button
-                  type="button"
-                  onClick={handleResetProgressToLevel1}
-                  className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-600 text-xs font-bold border border-slate-300 flex items-center gap-1 transition-all cursor-pointer"
-                  title="Đặt lại để thử thách lại từ Level 1"
-                >
-                  <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
-                  <span className="hidden md:inline">Chơi Lại L1</span>
-                </button>
-              </div>
-            </div>
-
-            {/* 2. BƯỚC 1: CHỌN 1 TRONG 5 TRÒ CHƠI THỬ THÁCH */}
-            <div className="space-y-1.5 shrink-0">
-              <div className="flex items-center justify-between px-0.5">
-                <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                  <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] font-black flex items-center justify-center">1</span>
-                  <span>Chọn Trò Chơi Muốn Thử Thách:</span>
-                </h3>
-                <span className="text-[11px] text-emerald-800 font-bold bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300">
-                  5 mini-game luyện gõ phong phú
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+          <div className="flex-1 min-h-0 p-3 sm:p-4 lg:p-5 flex flex-col gap-3 lg:gap-4 overflow-y-auto">
+            {/* 1. CHỌN TRÒ CHƠI: thẻ to, biểu tượng vẽ riêng, giãn theo chiều cao màn hình */}
+            <section className="flex-[3] min-h-[220px] flex flex-col gap-2" aria-label="Chọn trò chơi">
+              <h3 className="text-sm lg:text-base font-black text-slate-800 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-black flex items-center justify-center">1</span>
+                Chọn trò chơi
+              </h3>
+              <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 auto-rows-fr gap-2.5 lg:gap-3">
                 {GAMES_CATALOG.map((g) => {
                   const isSelected = selectedGameId === g.id;
                   const unlocked = getUnlockedLevelForGame(g.id, gameMode, vnSubMode);
@@ -1388,168 +1425,124 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
                     <button
                       key={g.id}
                       type="button"
+                      data-game-card={g.id}
+                      aria-pressed={isSelected}
                       onClick={() => {
                         setSelectedGameId(g.id);
                         setLevel(Math.min(level, unlocked));
                       }}
-                      className={`relative p-2.5 rounded-2xl text-left transition-all duration-200 cursor-pointer flex flex-col justify-between group ${
+                      className={`relative p-3 lg:p-4 rounded-3xl text-center transition-all duration-200 cursor-pointer flex flex-col items-center justify-center gap-2 group ${
                         isSelected
-                          ? 'bg-gradient-to-b from-amber-50 via-orange-50 to-white border-2 border-amber-400 ring-2 ring-amber-300 shadow-md scale-[1.01]'
-                          : 'bg-white hover:bg-emerald-50/40 border border-slate-200 hover:border-emerald-300 shadow-2xs'
+                          ? 'bg-gradient-to-b from-amber-50 to-white border-[3px] border-amber-400 shadow-lg ring-4 ring-amber-200/60'
+                          : 'bg-white hover:bg-emerald-50/50 border-2 border-slate-200 hover:border-emerald-300 shadow-sm'
                       }`}
                     >
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-2xl sm:text-3xl transition-transform group-hover:scale-110 drop-shadow-xs">
-                            {g.icon}
-                          </span>
-                          <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-full border ${
-                            isSelected
-                              ? 'bg-amber-500 text-white border-amber-600'
-                              : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                          }`}>
-                            Mở L{unlocked}/5
-                          </span>
-                        </div>
-                        <div className="font-black text-xs sm:text-sm text-slate-900 leading-tight group-hover:text-emerald-700 truncate">
-                          {g.name}
-                        </div>
-                        <div className="text-[9px] text-slate-500 font-bold mb-1 truncate">{g.subtitle}</div>
-                        <p className="text-[10px] text-slate-600 line-clamp-2 leading-snug">
-                          {g.description}
-                        </p>
-                      </div>
-
-                      <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[9px]">
-                        {isSelected ? (
-                          <span className="font-black text-emerald-700 flex items-center gap-0.5">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                            <span>Đang chọn</span>
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 group-hover:text-emerald-600 font-bold flex items-center gap-0.5">
-                            <span>Bấm để chọn</span>
-                            <ChevronRight className="w-2.5 h-2.5" />
-                          </span>
-                        )}
-                      </div>
+                      {isSelected && (
+                        <CheckCircle2 className="absolute top-2.5 right-2.5 w-6 h-6 text-emerald-600 fill-emerald-100" aria-hidden="true" />
+                      )}
+                      <GameIcon id={g.id} size={84} className="transition-transform group-hover:scale-105 w-16 h-16 lg:w-[84px] lg:h-[84px]" />
+                      <div className="font-black text-base lg:text-lg text-slate-900 leading-tight">{g.name}</div>
+                      <p className="text-xs lg:text-sm text-slate-600 leading-snug line-clamp-2 max-w-[28ch]">{g.description}</p>
+                      <span
+                        className={`text-xs font-black px-2.5 py-0.5 rounded-full ${
+                          isSelected ? 'bg-amber-500 text-white' : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                        }`}
+                      >
+                        Đã mở Level {unlocked}/5
+                      </span>
                     </button>
                   );
                 })}
               </div>
-            </div>
+            </section>
 
-            {/* 3. BƯỚC 2: LỘ TRÌNH 5 CẤP ĐỘ TUẦN TỰ (LEVEL 1 -> LEVEL 5) */}
-            <div className="bg-gradient-to-r from-emerald-50/80 via-teal-50/60 to-amber-50/70 border border-emerald-300 rounded-2xl p-2.5 sm:p-3 space-y-2 shrink-0 shadow-2xs">
-              <div className="flex items-center justify-between border-b border-emerald-200/80 pb-1.5">
+            {/* 2. CHỌN LEVEL của trò chơi đang chọn */}
+            <section
+              className="flex-[2] min-h-[150px] flex flex-col gap-2 bg-gradient-to-r from-emerald-50/80 via-teal-50/60 to-amber-50/70 border border-emerald-300 rounded-3xl p-3 lg:p-4"
+              aria-label="Chọn cấp độ"
+            >
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <h3 className="text-sm lg:text-base font-black text-slate-800 flex items-center gap-2 min-w-0">
+                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-black flex items-center justify-center shrink-0">2</span>
+                  <GameIcon id={currentGame.id} size={28} />
+                  <span className="truncate">Chọn Level · {currentGame.name}</span>
+                </h3>
                 <div className="flex items-center gap-2">
-                  <span className="text-xl filter drop-shadow-xs">{currentGame.icon}</span>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs sm:text-sm font-black text-slate-900 uppercase">
-                        2. Lộ Trình 5 Cấp Độ: {currentGame.name}
-                      </span>
-                      <span className="text-[10px] font-bold text-slate-600 hidden md:inline">
-                        • {currentGame.themeNote}
-                      </span>
-                    </div>
-                  </div>
+                  <span className="text-xs text-slate-600 font-semibold hidden md:inline">Qua 15 lượt để mở Level kế tiếp</span>
+                  <button
+                    type="button"
+                    onClick={handleResetProgressToLevel1}
+                    className="h-8 px-3 rounded-full bg-white hover:bg-slate-100 text-slate-600 text-xs font-bold border border-slate-300 flex items-center gap-1 cursor-pointer"
+                    title="Đặt lại để thử thách lại từ Level 1"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                    Chơi lại từ Level 1
+                  </button>
                 </div>
-                <span className="text-[10px] text-amber-900 font-black bg-amber-100 px-2 py-0.5 rounded-full border border-amber-300 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-amber-600" />
-                  <span>Tiến độ: Đã mở Level {currentMaxUnlocked}/5</span>
-                </span>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+              <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 auto-rows-fr gap-2 lg:gap-3">
                 {[1, 2, 3, 4, 5].map((lvlNum) => {
                   const isUnlocked = lvlNum <= currentMaxUnlocked;
                   const isSelected = level === lvlNum;
                   const info = LEVEL_NAMES[lvlNum];
-
                   return (
                     <button
                       key={lvlNum}
                       type="button"
+                      data-level-card={lvlNum}
                       disabled={!isUnlocked}
+                      aria-pressed={isSelected}
                       onClick={() => setLevel(lvlNum)}
-                      className={`p-2.5 rounded-2xl border text-left transition-all duration-200 flex flex-col justify-between ${
+                      className={`p-2.5 lg:p-3 rounded-2xl text-left transition-all duration-200 flex flex-col justify-center gap-0.5 ${
                         !isUnlocked
-                          ? 'bg-slate-100/90 border-slate-200 text-slate-400 opacity-60 cursor-not-allowed'
+                          ? 'bg-slate-100/90 border border-slate-200 text-slate-400 opacity-60 cursor-not-allowed'
                           : isSelected
-                          ? 'bg-gradient-to-b from-amber-50 to-orange-50 border-2 border-amber-500 shadow-md ring-2 ring-amber-300 cursor-pointer scale-[1.01]'
-                          : 'bg-white border border-emerald-200 hover:border-emerald-400 text-slate-700 cursor-pointer hover:bg-emerald-50/40'
+                          ? 'bg-gradient-to-b from-amber-50 to-orange-50 border-[3px] border-amber-500 shadow-md cursor-pointer'
+                          : 'bg-white border-2 border-emerald-200 hover:border-emerald-400 text-slate-700 cursor-pointer'
                       }`}
                     >
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className={`font-black text-xs ${isSelected ? 'text-amber-900' : isUnlocked ? 'text-slate-900' : 'text-slate-400'}`}>
-                            Level {lvlNum}
-                          </span>
-                          {isUnlocked ? (
-                            <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-[9px] font-black border border-emerald-300">
-                              ✓
-                            </span>
-                          ) : (
-                            <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-400 flex items-center justify-center text-[9px] font-black">
-                              <Lock className="w-2.5 h-2.5" />
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="text-[10px] font-black text-emerald-800 mb-0.5 truncate">
-                          {info.subtitle}
-                        </div>
-                        <p className="text-[9px] leading-snug line-clamp-2 text-slate-600">
-                          {info.descVi}
-                        </p>
-                      </div>
-
-                      <div className="mt-1.5 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[9px]">
-                        <span className="text-slate-500 font-medium">Thời gian: {info.timeLimit}s</span>
-                        <span className="font-black text-emerald-700">15 lượt</span>
-                      </div>
+                      <span className="flex items-center justify-between">
+                        <span className={`font-black text-base lg:text-lg ${isSelected ? 'text-amber-900' : isUnlocked ? 'text-slate-900' : 'text-slate-400'}`}>
+                          Level {lvlNum}
+                        </span>
+                        {!isUnlocked && <Lock className="w-4 h-4" aria-label="Chưa mở" />}
+                      </span>
+                      <span className="text-xs lg:text-sm font-black text-emerald-800 truncate">{info.subtitle}</span>
+                      <span className="text-xs text-slate-500 font-semibold">⏱ {info.timeLimit} giây / lượt</span>
                     </button>
                   );
                 })}
               </div>
-            </div>
+            </section>
 
-            {/* 4. THANH HÀNH ĐỘNG DƯỚI CÙNG (BOTTOM ACTION BAR) */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 pt-1 px-1 shrink-0">
-              <div className="flex items-center gap-2 flex-wrap text-xs">
-                <div className="px-3 py-1.5 rounded-xl bg-white border border-emerald-200 font-black text-slate-800 flex items-center gap-1.5 shadow-2xs">
-                  <span>{currentGame.icon}</span>
-                  <span>{currentGame.name}</span>
-                  <span className="text-slate-400">•</span>
-                  <span className="text-amber-700">Level {level}</span>
-                  <span className="text-slate-400">•</span>
-                  <span className="text-emerald-700 font-black">
-                    {gameMode === 'accented'
-                      ? vnSubMode === 'smart_unaccented'
-                        ? '⚡ VN Không Dấu'
-                        : '🎯 VN Có Dấu Chuẩn'
-                      : '🇬🇧 Tiếng Anh'}
-                  </span>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleOpenModeModal}
-                  className="px-3 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-950 font-black text-xs border border-amber-300 transition-all cursor-pointer flex items-center gap-1 shadow-2xs hover:scale-105 active:scale-95"
-                  title="Mở menu nổi: Đổi ngôn ngữ và phân nhánh độ khó"
-                >
-                  <span>⚙️ Tùy Chọn Chế Độ Gõ</span>
-                </button>
-              </div>
+            {/* 3. THANH DƯỚI: chế độ gõ (một chỗ duy nhất) + nút bắt đầu */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={handleOpenModeModal}
+                data-testid="game-mode-button"
+                className="min-h-[48px] px-4 rounded-full bg-white hover:bg-amber-50 text-slate-800 text-sm font-black border-2 border-amber-300 shadow-sm cursor-pointer flex items-center gap-2"
+                title="Đổi ngôn ngữ (Tiếng Việt / Tiếng Anh) và chế độ gõ"
+              >
+                <span className="text-slate-500 font-bold">Chế độ gõ:</span>
+                <span className="text-amber-900">
+                  {gameMode === 'accented'
+                    ? vnSubMode === 'smart_unaccented'
+                      ? '🇻🇳 Tiếng Việt không dấu'
+                      : '🇻🇳 Tiếng Việt có dấu'
+                    : '🇬🇧 Tiếng Anh'}
+                </span>
+                <span className="text-xs bg-amber-500 text-white px-2 py-0.5 rounded-full">Đổi</span>
+              </button>
 
               <button
                 type="button"
                 onClick={handleStartButtonClick}
-                className="w-full sm:w-auto px-10 py-3 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-emerald-600 hover:from-orange-400 hover:to-emerald-500 text-white font-black text-sm sm:text-base shadow-xl shadow-orange-500/25 flex items-center justify-center gap-2.5 transition-all transform hover:scale-105 active:scale-95 cursor-pointer"
+                className="w-full sm:w-auto min-h-[56px] px-10 rounded-full bg-gradient-to-r from-orange-500 via-amber-500 to-emerald-600 hover:from-orange-400 hover:to-emerald-500 text-white font-black text-base lg:text-lg shadow-xl shadow-orange-500/25 flex items-center justify-center gap-2.5 transition-transform hover:scale-[1.03] active:scale-95 cursor-pointer"
               >
                 <Play className="w-5 h-5 fill-white" />
-                <span>BẮT ĐẦU CHƠI NGAY 🚀</span>
+                <span>BẮT ĐẦU CHƠI · {currentGame.name} · Level {level}</span>
               </button>
             </div>
           </div>
@@ -1557,7 +1550,7 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
           // ==========================================
           // MÀN HÌNH CHƠI GAME & ĐỒ HỌA TRỰC QUAN (TƯƠI SÁNG & SINH ĐỘNG)
           // ==========================================
-          <div className="flex-1 flex flex-col relative overflow-hidden bg-gradient-to-b from-emerald-50/50 via-teal-50/30 to-amber-50/40">
+          <div ref={playAreaRef} data-testid="game-play-area" className="flex-1 min-h-0 flex flex-col relative overflow-hidden bg-gradient-to-b from-emerald-50/50 via-teal-50/30 to-amber-50/40">
             {/* THANH THÔNG TIN TRẬN ĐẤU: GAM MÀU TƯƠI SÁNG & BẮT MẮT */}
             <div className="px-4 sm:px-6 py-2.5 bg-gradient-to-r from-emerald-100/90 via-teal-100/80 to-amber-100/90 border-b-2 border-emerald-300/80 flex flex-wrap items-center justify-between gap-3 shrink-0 text-slate-800 shadow-xs">
               <div className="flex items-center gap-2 sm:gap-3 text-xs font-black">
@@ -1598,23 +1591,17 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
 
               <div className="flex items-center gap-2">
                 <span className="text-xs text-emerald-900 font-black bg-white px-3 py-1.5 rounded-xl border border-emerald-300 shadow-2xs flex items-center gap-1.5">
-                  {gameMode === 'accented' ? (
-                    vnSubMode === 'smart_unaccented' ? (
-                      <span>🇻🇳 Tiếng Việt • ⚡ Không Dấu</span>
-                    ) : (
-                      <span>🇻🇳 Tiếng Việt • 🎯 Có Dấu Chuẩn</span>
-                    )
-                  ) : (
-                    <span>🇬🇧 Tiếng Anh</span>
-                  )}
-                  <span>• Level {level}/5</span>
+                  <GameIcon id={currentGame.id} size={22} />
+                  Level {level}/5 ·{' '}
+                  {gameMode === 'accented' ? (vnSubMode === 'smart_unaccented' ? 'VN không dấu' : 'VN có dấu') : 'Tiếng Anh'}
                 </span>
                 <button
                   type="button"
                   onClick={() => setIsPlaying(false)}
-                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-slate-700 text-xs font-black transition-all border border-emerald-300 shadow-2xs cursor-pointer hover:scale-105 active:scale-95"
+                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-slate-700 text-xs font-black transition-all border border-emerald-300 shadow-2xs cursor-pointer"
+                  title="Quay lại sảnh để chọn trò chơi, Level hoặc chế độ gõ khác"
                 >
-                  Đổi Game / Level 🔙
+                  ← Đổi trò chơi
                 </button>
               </div>
             </div>
@@ -1708,7 +1695,7 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
                       </span>
                     </div>
 
-                    {renderWordWithHighlight(climberWordItem.word, currentTypedInput)}
+                    {renderWordWithPicture(climberWordItem, currentTypedInput)}
 
                     {/* Thanh thời gian mỏm đá */}
                     <div className="w-full max-w-md mt-3 space-y-1">
@@ -1764,7 +1751,7 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
                   {/* Các quả bóng bay mang chữ */}
                   <div className="flex-1 relative overflow-hidden">
                     {balloons.map((b) => {
-                      const isTargeting = isPrefixMatch(currentTypedInput, b.wordItem.word);
+                      const isTargeting = isPrefixMatch(currentTypedInput, b.wordItem.word, gameMode, vnSubMode);
 
                       return (
                         <div
@@ -1778,7 +1765,9 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
                             }`}
                             style={{ backgroundColor: b.color }}
                           >
-                            <span className="text-2xl filter drop-shadow">🎈</span>
+                            <span className="text-4xl leading-none filter drop-shadow" role="img" aria-label={`Hình minh họa: ${b.wordItem.word}`}>
+                              {wordPicture(b.wordItem)}
+                            </span>
                             <div className="font-mono font-black text-slate-950 text-sm sm:text-base px-2.5 py-0.5 bg-white/95 rounded-xl mt-1 shadow-sm border border-slate-200">
                               {b.wordItem.word}
                             </div>
@@ -1840,13 +1829,13 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
                           className="absolute flex items-center gap-2 bg-gradient-to-r from-teal-500 to-emerald-600 px-3.5 py-1.5 rounded-xl shadow-md font-mono font-black text-white text-sm sm:text-base border border-teal-300"
                           style={{ left: `${note.x}%` }}
                         >
-                          <span>🎵</span>
+                          <span className="text-xl leading-none">{wordPicture(note.wordItem)}</span>
                           <span>{note.wordItem.word}</span>
                         </div>
                       ))}
                     </div>
 
-                    {musicNotes[0] && renderWordWithHighlight(musicNotes[0].wordItem.word, currentTypedInput)}
+                    {musicNotes[0] && renderWordWithPicture(musicNotes[0].wordItem, currentTypedInput)}
                   </div>
                 </div>
               )}
@@ -1899,7 +1888,7 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
                     <span className="text-xs text-amber-900 font-bold mb-2 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
                       Gợi ý: {treasureWordItem.hint}
                     </span>
-                    {renderWordWithHighlight(treasureWordItem.word, currentTypedInput)}
+                    {renderWordWithPicture(treasureWordItem, currentTypedInput)}
                   </div>
                 </div>
               )}
@@ -1961,7 +1950,7 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
                         ({currentSignWordItem.hint})
                       </span>
                     </div>
-                    {renderWordWithHighlight(currentSignWordItem.word, currentTypedInput)}
+                    {renderWordWithPicture(currentSignWordItem, currentTypedInput)}
                   </div>
                 </div>
               )}
@@ -2062,125 +2051,140 @@ export const MultiGameHub: React.FC<MultiGameHubProps> = ({ onClose, soundEnable
               </div>
             </div>
 
-            {/* ================================================================ */}
-            {/* MODAL 1: CHÚC MỪNG VƯỢT QUA LEVEL X (MỞ KHÓA LEVEL X + 1) */}
-            {/* ================================================================ */}
-            {isLevelClearedModalOpen && (
-              <div className="absolute inset-0 z-40 bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in zoom-in duration-200">
-                <div className="bg-gradient-to-b from-white via-emerald-50/60 to-amber-50/60 border-4 border-amber-400 rounded-3xl p-6 sm:p-8 max-w-lg w-full text-center space-y-5 shadow-2xl relative">
-                  <div className="inline-block p-4 rounded-3xl bg-gradient-to-tr from-amber-400 to-yellow-300 shadow-xl shadow-amber-500/30">
-                    <Trophy className="w-12 h-12 text-slate-950 animate-bounce" />
-                  </div>
+          </div>
+        )}
 
-                  <div>
-                    <span className="text-xs font-black uppercase tracking-wider text-emerald-700 bg-emerald-100 px-3 py-1 rounded-full border border-emerald-300">
-                      🎉 XUẤT SẮC VƯỢT QUA LEVEL {level}!
-                    </span>
-                    <h3 className="text-2xl font-black text-slate-900 mt-2">
-                      ĐÃ MỞ KHÓA LEVEL {level + 1} 🔓
-                    </h3>
-                    <p className="text-xs text-slate-600 mt-1.5 max-w-sm mx-auto font-medium">
-                      Em đã hoàn thành trọn vẹn 15/15 lượt gõ thử thách của Level {level}. Hãy tiếp tục tiến lên chinh phục Level tiếp theo!
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2.5 text-left">
-                    <div className="bg-white p-3 rounded-2xl border-2 border-sky-200 shadow-xs">
-                      <span className="text-[10px] text-slate-500 font-bold block">Tốc độ WPM</span>
-                      <span className="text-base font-black text-sky-600">{wpm} WPM</span>
-                    </div>
-                    <div className="bg-white p-3 rounded-2xl border-2 border-emerald-200 shadow-xs">
-                      <span className="text-[10px] text-slate-500 font-bold block">Độ chính xác</span>
-                      <span className="text-base font-black text-emerald-600">{accuracy}%</span>
-                    </div>
-                    <div className="bg-white p-3 rounded-2xl border-2 border-amber-200 shadow-xs">
-                      <span className="text-[10px] text-slate-500 font-bold block">Tổng Điểm</span>
-                      <span className="text-base font-black text-amber-600">{score}</span>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col sm:flex-row gap-3 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => handleStartGame(selectedGameId, level + 1)}
-                      className="flex-1 py-3.5 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-500 to-emerald-600 hover:from-orange-400 hover:to-emerald-500 text-white font-black text-sm transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xl shadow-orange-500/25 active:scale-95 hover:scale-105"
-                    >
-                      <span>CHINH PHỤC TIẾP LEVEL {level + 1} 🚀</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleStartGame(selectedGameId, level)}
-                      className="px-4 py-3 rounded-2xl bg-white hover:bg-slate-100 text-slate-700 font-black text-xs transition-all border-2 border-slate-300 cursor-pointer"
-                    >
-                      Chơi Lại Level {level}
-                    </button>
-                  </div>
-                </div>
+        {/* Hai modal chúc mừng đặt ngoài nhánh isPlaying: handleLevelCleared đặt isPlaying=false nên đặt trong nhánh sẽ không bao giờ hiện. */}
+        {/* ================================================================ */}
+        {/* MODAL 1: CHÚC MỪNG VƯỢT QUA LEVEL X (MỞ KHÓA LEVEL X + 1) */}
+        {/* ================================================================ */}
+        {isLevelClearedModalOpen && (
+          <div className="absolute inset-0 z-40 bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-[clamp(8px,2vh,24px)] animate-in fade-in zoom-in duration-200">
+            {/* Hộp TO, co giãn theo khung trò chơi (chữ dùng clamp theo vw/vh) để cả lớp nhìn rõ kết quả */}
+            <div
+              data-testid="level-cleared-modal"
+              className="bg-gradient-to-b from-white via-emerald-50/60 to-amber-50/60 border-[6px] border-amber-400 rounded-[36px] w-[min(92%,1100px)] max-h-full overflow-y-auto text-center shadow-2xl relative px-[clamp(16px,3vw,56px)] py-[clamp(14px,3vh,44px)] flex flex-col items-center gap-[clamp(10px,2.4vh,28px)]"
+            >
+              <div className="p-[clamp(12px,2vh,26px)] rounded-[32px] bg-gradient-to-tr from-amber-400 to-yellow-300 shadow-xl shadow-amber-500/30">
+                <Trophy className="w-[clamp(56px,11vh,120px)] h-[clamp(56px,11vh,120px)] text-slate-950 animate-bounce" />
               </div>
-            )}
 
-            {/* ================================================================ */}
-            {/* MODAL 2: VINH DANH ĐẠI KIỆN TƯỚNG VÔ ĐỊCH TOÀN BỘ 5 LEVEL */}
-            {/* ================================================================ */}
-            {isGrandChampionModalOpen && (
-              <div className="absolute inset-0 z-50 bg-slate-950/75 backdrop-blur-lg flex items-center justify-center p-4 animate-in fade-in zoom-in duration-300">
-                <div className="bg-gradient-to-b from-white via-amber-50/60 to-emerald-50/60 border-4 border-amber-400 rounded-3xl p-6 sm:p-8 max-w-xl w-full text-center space-y-5 shadow-2xl relative">
-                  <div className="inline-block p-5 rounded-3xl bg-gradient-to-tr from-amber-400 via-yellow-300 to-amber-500 shadow-2xl shadow-amber-500/50">
-                    <Trophy className="w-16 h-16 text-slate-950 animate-bounce" />
-                  </div>
-
-                  <div>
-                    <div className="flex justify-center gap-1.5 text-amber-500 mb-2">
-                      {[1, 2, 3, 4, 5].map((i) => (
-                        <Star key={i} className="w-6 h-6 fill-amber-400 animate-spin" style={{ animationDuration: '6s' }} />
-                      ))}
-                    </div>
-                    <span className="text-xs font-black uppercase tracking-widest text-amber-900 bg-amber-100 px-3 py-1 rounded-full border border-amber-300">
-                      👑 HUY CHƯƠNG VÀNG VÔ ĐỊCH TIỂU HỌC 2026
-                    </span>
-                    <h3 className="text-2xl sm:text-3xl font-black text-slate-900 mt-2 bg-gradient-to-r from-amber-600 via-orange-600 to-emerald-600 bg-clip-text text-transparent">
-                      ĐẠI KIỆN TƯỚNG PHÁ ĐẢO CẢ 5 LEVEL!
-                    </h3>
-                    <p className="text-xs sm:text-sm text-slate-700 mt-2 max-w-md mx-auto leading-relaxed font-medium">
-                      Tuyệt vời! Em đã hoàn thành trọn vẹn cả 5 cấp độ (15 lượt/level) của trò chơi {currentGame.name} ở chế độ {gameMode === 'accented' ? 'Tiếng Việt có dấu' : 'Tiếng Anh không dấu'}! Đôi tay vàng của em đã lướt phím như một nghệ sĩ thực thụ!
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-3 text-left">
-                    <div className="bg-white p-3 rounded-2xl border-2 border-sky-200 shadow-xs">
-                      <span className="text-[10px] text-slate-500 font-bold block">Tốc độ WPM</span>
-                      <span className="text-lg font-black text-sky-600">{wpm} WPM</span>
-                    </div>
-                    <div className="bg-white p-3 rounded-2xl border-2 border-emerald-200 shadow-xs">
-                      <span className="text-[10px] text-slate-500 font-bold block">Độ chính xác</span>
-                      <span className="text-lg font-black text-emerald-600">{accuracy}%</span>
-                    </div>
-                    <div className="bg-white p-3 rounded-2xl border-2 border-amber-200 shadow-xs">
-                      <span className="text-[10px] text-slate-500 font-bold block">Tổng Điểm Kỷ Lục</span>
-                      <span className="text-lg font-black text-amber-600">{score}</span>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-3 pt-3">
-                    <button
-                      type="button"
-                      onClick={() => handleStartGame(selectedGameId, 1)}
-                      className="flex-1 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-black text-sm transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg hover:scale-105 active:scale-95"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                      <span>Thử Thách Lại Từ Level 1</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsPlaying(false)}
-                      className="px-6 py-3.5 rounded-2xl bg-white hover:bg-slate-100 text-slate-700 font-black text-sm transition-all border-2 border-slate-300 cursor-pointer"
-                    >
-                      Chọn Game Khác 🎮
-                    </button>
-                  </div>
-                </div>
+              <div className="space-y-[clamp(4px,1vh,12px)]">
+                <span className="inline-block font-black uppercase tracking-wide text-emerald-800 bg-emerald-100 px-4 py-1 rounded-full border-2 border-emerald-300 text-[clamp(0.95rem,1.6vw,1.6rem)]">
+                  🎉 XUẤT SẮC VƯỢT QUA LEVEL {level}!
+                </span>
+                <h3 className="font-black text-slate-900 leading-tight text-[clamp(1.6rem,min(4.2vw,7vh),4rem)]">
+                  ĐÃ MỞ KHÓA LEVEL {level + 1} 🔓
+                </h3>
+                <p className="text-slate-700 font-semibold leading-snug text-[clamp(1rem,1.7vw,1.6rem)] max-w-[52ch] mx-auto">
+                  Em đã hoàn thành trọn vẹn 15/15 lượt gõ của Level {level}. Tiếp tục chinh phục Level tiếp theo nhé!
+                </p>
               </div>
-            )}
+
+              <div className="w-full grid grid-cols-3 gap-[clamp(8px,1.4vw,24px)]">
+                {[
+                  { label: 'Tốc độ', value: `${wpm} WPM`, cls: 'border-sky-300 text-sky-600' },
+                  { label: 'Độ chính xác', value: `${accuracy}%`, cls: 'border-emerald-300 text-emerald-600' },
+                  { label: 'Tổng điểm', value: `${score}`, cls: 'border-amber-300 text-amber-600' },
+                ].map((t) => (
+                  <div key={t.label} className={`bg-white rounded-3xl border-[3px] shadow-xs py-[clamp(8px,1.8vh,22px)] ${t.cls}`}>
+                    <span className="block font-bold text-slate-500 text-[clamp(0.85rem,1.3vw,1.3rem)]">{t.label}</span>
+                    <span className="block font-black leading-tight text-[clamp(1.4rem,min(3.4vw,5.4vh),3.4rem)]">{t.value}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="w-full flex flex-col sm:flex-row gap-[clamp(8px,1.2vw,20px)]">
+                <button
+                  type="button"
+                  onClick={() => handleStartGame(selectedGameId, level + 1)}
+                  autoFocus
+                  className="flex-1 py-[clamp(10px,2vh,22px)] rounded-full bg-gradient-to-r from-orange-500 via-amber-500 to-emerald-600 hover:from-orange-400 hover:to-emerald-500 text-white font-black text-[clamp(1.1rem,2vw,2rem)] flex items-center justify-center gap-2 cursor-pointer shadow-xl shadow-orange-500/25 active:scale-95"
+                >
+                  CHINH PHỤC TIẾP LEVEL {level + 1} 🚀
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleStartGame(selectedGameId, level)}
+                  className="px-[clamp(16px,2vw,36px)] py-[clamp(10px,2vh,22px)] rounded-full bg-white hover:bg-slate-100 text-slate-700 font-black text-[clamp(1rem,1.5vw,1.5rem)] border-[3px] border-slate-300 cursor-pointer"
+                >
+                  Chơi lại Level {level}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================================================================ */}
+        {/* MODAL 2: VINH DANH ĐẠI KIỆN TƯỚNG VÔ ĐỊCH TOÀN BỘ 5 LEVEL */}
+        {/* ================================================================ */}
+        {isGrandChampionModalOpen && (
+          <div className="absolute inset-0 z-50 bg-slate-950/75 backdrop-blur-lg flex items-center justify-center p-[clamp(8px,2vh,24px)] animate-in fade-in zoom-in duration-300">
+            <div
+              data-testid="grand-champion-modal"
+              className="bg-gradient-to-b from-white via-amber-50/60 to-emerald-50/60 border-[6px] border-amber-400 rounded-[36px] w-[min(92%,1150px)] max-h-full overflow-y-auto text-center shadow-2xl relative px-[clamp(16px,3vw,56px)] py-[clamp(14px,3vh,44px)] flex flex-col items-center gap-[clamp(10px,2.2vh,26px)]"
+            >
+              <div className="p-[clamp(12px,2vh,26px)] rounded-[32px] bg-gradient-to-tr from-amber-400 via-yellow-300 to-amber-500 shadow-2xl shadow-amber-500/50">
+                <Trophy className="w-[clamp(48px,9vh,120px)] h-[clamp(48px,9vh,120px)] text-slate-950 animate-bounce" />
+              </div>
+
+              <div className="space-y-[clamp(4px,1vh,12px)]">
+                <div className="flex justify-center gap-2 text-amber-500">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <Star
+                      key={i}
+                      className="w-[clamp(18px,2.8vh,40px)] h-[clamp(18px,2.8vh,40px)] fill-amber-400 animate-spin"
+                      style={{ animationDuration: '6s' }}
+                    />
+                  ))}
+                </div>
+                <span className="inline-block font-black uppercase tracking-wide text-amber-900 bg-amber-100 px-4 py-1 rounded-full border-2 border-amber-300 text-[clamp(0.95rem,1.6vw,1.6rem)]">
+                  👑 HUY CHƯƠNG VÀNG VÔ ĐỊCH
+                </span>
+                <h3 className="font-black leading-tight bg-gradient-to-r from-amber-600 via-orange-600 to-emerald-600 bg-clip-text text-transparent text-[clamp(1.5rem,min(3.4vw,5.6vh),3.4rem)]">
+                  ĐẠI KIỆN TƯỚNG PHÁ ĐẢO CẢ 5 LEVEL!
+                </h3>
+                <p className="text-slate-700 font-semibold leading-snug text-[clamp(1rem,1.6vw,1.5rem)] max-w-[60ch] mx-auto">
+                  Em đã hoàn thành cả 5 cấp độ của trò chơi {currentGame.name} ({gameMode === 'accented' ? 'Tiếng Việt' : 'Tiếng Anh'}). Đôi tay vàng lướt phím thật tuyệt vời!
+                </p>
+              </div>
+
+              <div className="w-full grid grid-cols-3 gap-[clamp(8px,1.4vw,24px)]">
+                {[
+                  { label: 'Tốc độ', value: `${wpm} WPM`, cls: 'border-sky-300 text-sky-600' },
+                  { label: 'Độ chính xác', value: `${accuracy}%`, cls: 'border-emerald-300 text-emerald-600' },
+                  { label: 'Tổng điểm kỷ lục', value: `${score}`, cls: 'border-amber-300 text-amber-600' },
+                ].map((t) => (
+                  <div key={t.label} className={`bg-white rounded-3xl border-[3px] shadow-xs py-[clamp(8px,1.8vh,22px)] ${t.cls}`}>
+                    <span className="block font-bold text-slate-500 text-[clamp(0.85rem,1.3vw,1.3rem)]">{t.label}</span>
+                    <span className="block font-black leading-tight text-[clamp(1.4rem,min(3.4vw,5.4vh),3.4rem)]">{t.value}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="w-full flex flex-col sm:flex-row gap-[clamp(8px,1.2vw,20px)]">
+                <button
+                  type="button"
+                  onClick={() => handleStartGame(selectedGameId, 1)}
+                  autoFocus
+                  className="flex-1 py-[clamp(10px,2vh,22px)] rounded-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-black text-[clamp(1.1rem,2vw,2rem)] flex items-center justify-center gap-2 cursor-pointer shadow-lg active:scale-95"
+                >
+                  <RotateCcw className="w-[clamp(18px,2vw,32px)] h-[clamp(18px,2vw,32px)]" />
+                  Thử thách lại từ Level 1
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Phải tự đóng modal vì modal giờ nằm ngoài nhánh isPlaying.
+                    setIsGrandChampionModalOpen(false);
+                    setIsPlaying(false);
+                  }}
+                  className="px-[clamp(16px,2vw,36px)] py-[clamp(10px,2vh,22px)] rounded-full bg-white hover:bg-slate-100 text-slate-700 font-black text-[clamp(1rem,1.5vw,1.5rem)] border-[3px] border-slate-300 cursor-pointer"
+                >
+                  Chọn trò chơi khác 🎮
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

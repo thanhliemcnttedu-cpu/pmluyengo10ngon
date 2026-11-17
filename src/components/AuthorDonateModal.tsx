@@ -17,7 +17,33 @@ import {
   Download,
   Share2,
 } from 'lucide-react';
-import QRCode from 'qrcode';
+
+// Sao chép an toàn: trên http qua mạng LAN, navigator.clipboard có thể không tồn tại,
+// nên dùng textarea + execCommand('copy') làm dự phòng.
+const copyTextSafely = async (text: string): Promise<boolean> => {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Bị chặn quyền: thử cách dự phòng bên dưới
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+};
 
 interface AuthorDonateModalProps {
   isOpen: boolean;
@@ -28,7 +54,7 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [selectedAmount, setSelectedAmount] = useState<number>(20000);
   const [imgLoadError, setImgLoadError] = useState<boolean>(false);
-  const [localQrDataUrl, setLocalQrDataUrl] = useState<string>('');
+  const [copyFailed, setCopyFailed] = useState<boolean>(false);
 
   // THÔNG TIN TÁC GIẢ & TÀI KHOẢN BIDV CHÍNH THỨC
   const authorName = 'Nguyễn Thanh Liêm';
@@ -52,11 +78,14 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
   const transferMessage = 'Ung ho phan mem Luyen go SGK';
 
   // Copy helper
-  const copyToClipboard = (text: string, fieldName: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(fieldName);
+  const copyToClipboard = async (text: string, fieldName: string) => {
+    const ok = await copyTextSafely(text);
+    // Không chép được thì báo rõ để người dùng tự chép tay, tránh tưởng đã chép.
+    setCopyFailed(!ok);
+    setCopiedField(ok ? fieldName : null);
     setTimeout(() => {
       setCopiedField(null);
+      setCopyFailed(false);
     }, 2500);
   };
 
@@ -65,28 +94,12 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
     transferMessage
   )}&accountName=${encodeURIComponent(authorNameNoAccent)}`;
 
-  // Tạo mã QR dự phòng cục bộ để không bao giờ bị lỗi hiển thị
+  // Bỏ mã QR dự phòng tự tạo: chuỗi "2|99|..." không phải chuẩn VietQR nên app ngân hàng không đọc được.
+  // Khi ảnh VietQR lỗi (mất mạng) thì hiện số tài khoản dạng chữ để chuyển khoản tay.
+  // Đổi số tiền thì thử tải lại ảnh VietQR.
   useEffect(() => {
-    if (!isOpen) return;
-    const generateFallbackQr = async () => {
-      try {
-        // Chuỗi thông tin chuyển khoản nhanh
-        const qrContent = `2|99|${accountNumber}|${authorNameUpper}|BIDV TÂN UYÊN|0|0|${selectedAmount}|${transferMessage}|transfer_my_qr`;
-        const dataUrl = await QRCode.toDataURL(qrContent, {
-          width: 320,
-          margin: 1.5,
-          color: {
-            dark: '#0f172a',
-            light: '#ffffff',
-          },
-        });
-        setLocalQrDataUrl(dataUrl);
-      } catch (err) {
-        console.warn('Lỗi tạo mã QR cục bộ:', err);
-      }
-    };
-    generateFallbackQr();
-  }, [isOpen, selectedAmount]);
+    setImgLoadError(false);
+  }, [selectedAmount]);
 
   if (!isOpen) return null;
 
@@ -130,6 +143,11 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
         {/* THÂN MODAL (SCROLLABLE CONTAINER)                        */}
         {/* ======================================================== */}
         <div className="p-3.5 sm:p-5 overflow-y-auto space-y-3.5 text-slate-800 custom-scrollbar flex-1 bg-gradient-to-b from-amber-50/50 via-white to-orange-50/30">
+          {copyFailed && (
+            <div role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">
+              Trình duyệt không cho sao chép tự động. Hãy bôi đen và chép tay thông tin bên dưới.
+            </div>
+          )}
           
           {/* Lời ngỏ chân thành của tác giả */}
           <div className="bg-gradient-to-r from-amber-100/90 to-orange-100/80 border-2 border-amber-400 rounded-2xl p-3 sm:p-4 shadow-2xs flex items-start gap-3">
@@ -306,17 +324,12 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
                       onError={() => setImgLoadError(true)}
                       className="w-full h-full object-contain"
                     />
-                  ) : localQrDataUrl ? (
-                    <img
-                      src={localQrDataUrl}
-                      alt={`Mã QR dự phòng ${accountNumber}`}
-                      className="w-full h-full object-contain"
-                    />
                   ) : (
                     <div className="text-center p-3 text-xs flex flex-col items-center gap-1.5">
-                      <QrCode className="w-14 h-14 text-emerald-600" />
-                      <span className="font-bold text-slate-800">Mã QR BIDV</span>
-                      <span className="text-[10px] text-slate-500 font-mono">STK: {accountNumber}</span>
+                      <QrCode className="w-12 h-12 text-slate-400" />
+                      <span className="font-bold text-slate-800">Chưa tải được mã QR</span>
+                      <span className="text-[10px] text-slate-600">Chuyển khoản tay tới BIDV, STK:</span>
+                      <span className="text-sm text-slate-900 font-mono font-black">{accountNumberFormatted}</span>
                     </div>
                   )}
                 </div>

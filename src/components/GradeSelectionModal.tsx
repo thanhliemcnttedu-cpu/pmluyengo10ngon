@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { GradeAssignment } from '../types/typing';
 import { soundEngine } from '../utils/audio';
 import confetti from 'canvas-confetti';
@@ -23,6 +23,8 @@ interface GradeSelectionModalProps {
   onSelectGrade: (grade: number) => void;
   currentGrade: number;
   gradeAssignments?: Record<number, GradeAssignment>;
+  /** Mở Sổ tay hướng dẫn gõ ngay trên bảng chọn lớp (học sinh chưa biết cách gõ) */
+  onOpenTypingGuide?: () => void;
 }
 
 export const GradeSelectionModal: React.FC<GradeSelectionModalProps> = ({
@@ -31,13 +33,85 @@ export const GradeSelectionModal: React.FC<GradeSelectionModalProps> = ({
   onSelectGrade,
   currentGrade,
   gradeAssignments = {},
+  onOpenTypingGuide,
 }) => {
   const [isClosing, setIsClosing] = useState<boolean>(false);
   const [hoveredGrade, setHoveredGrade] = useState<number | null>(null);
+  // Chặn bấm đúp: trong 220ms chờ hiệu ứng, cú bấm thứ 2 sẽ gọi onSelectGrade lần nữa
+  const pickLockRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (isOpen) pickLockRef.current = false;
+  }, [isOpen]);
+
+  // Esc để đóng bảng chọn lớp
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !pickLockRef.current) {
+        pickLockRef.current = true;
+        setIsClosing(true);
+        setTimeout(() => {
+          setIsClosing(false);
+          onClose();
+        }, 180);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
+
+  // Màn hình rộng còn nhiều chỗ trống: phóng cả hộp theo tỉ lệ (giữ nguyên bố cục) cho vừa màn hình.
+  // Chỉ phóng to (>= 1), tối đa 1,6 lần, bề rộng bố cục giữ 1024px, cao tối đa 88% màn hình; màn nhỏ giữ nguyên như cũ.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const PANEL_BASE_WIDTH = 1024; // = max-w-5xl
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const el = panelRef.current;
+    if (!el) return;
+    // transition-all của hộp làm zoom cũng "trượt dần" 0,2 giây -> đo sai. Chỉ cho chuyển động độ mờ & phóng/thu.
+    el.style.transitionProperty = 'opacity, transform';
+    const fit = () => {
+      // Đo ở cỡ gốc (zoom 1) rồi mới tính hệ số
+      el.style.zoom = '1';
+      const parent = el.parentElement;
+      const cs = parent ? getComputedStyle(parent) : null;
+      // Bề rộng còn trống của lớp phủ (trừ lề p-3/p-5)
+      const availW = parent && cs
+        ? parent.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+        : window.innerWidth;
+      // offsetHeight không bị ảnh hưởng bởi hiệu ứng phóng 95% lúc mở (transform)
+      const h = el.offsetHeight;
+      if (!h) return;
+      // Giữ bề rộng bố cục đúng 1024px (max-w-5xl) để chữ không bị ép xuống dòng,
+      // và chiều cao sau khi phóng không quá 88% màn hình
+      const z = Math.min(1.6, (availW - 12) / PANEL_BASE_WIDTH, // trừ 12px: tránh làm tròn số lẻ làm chữ xuống dòng
+         (window.innerHeight * 0.88) / h); // 0,88: chừa chỗ cho hiệu ứng phóng 95%→100% lúc mở
+      el.style.zoom = z > 1.02 ? z.toFixed(3) : '1';
+    };
+    // Tính lại ở khung hình kế tiếp (lúc kích thước đã ổn định) khi cửa sổ hoặc lớp phủ đổi cỡ
+    let raf = 0;
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(fit);
+    };
+    fit();
+    schedule();
+    window.addEventListener('resize', schedule);
+    const ro = el.parentElement ? new ResizeObserver(schedule) : null;
+    if (ro && el.parentElement) ro.observe(el.parentElement);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', schedule);
+      ro?.disconnect();
+    };
+  }, [isOpen]);
 
   if (!isOpen && !isClosing) return null;
 
   const handleGradePick = (grade: number) => {
+    if (pickLockRef.current) return;
+    pickLockRef.current = true;
     // 1. Tự động kích hoạt chế độ Fullscreen (Toàn màn hình) trình duyệt theo cử chỉ nhấp chuột của người dùng
     try {
       if (!document.fullscreenElement) {
@@ -76,6 +150,8 @@ export const GradeSelectionModal: React.FC<GradeSelectionModalProps> = ({
   };
 
   const handleClose = () => {
+    if (pickLockRef.current) return;
+    pickLockRef.current = true;
     setIsClosing(true);
     setTimeout(() => {
       setIsClosing(false);
@@ -96,7 +172,9 @@ export const GradeSelectionModal: React.FC<GradeSelectionModalProps> = ({
       aria-labelledby="grade-select-title"
     >
       <div
-        className={`relative w-full max-w-4xl lg:max-w-5xl max-h-[96vh] flex flex-col bg-gradient-to-b from-sky-50 via-white to-amber-50 rounded-2xl sm:rounded-3xl shadow-2xl border-4 border-amber-300 overflow-hidden text-slate-800 transition-all duration-200 ${
+        ref={panelRef}
+        data-testid="grade-panel"
+        className={`relative w-full max-w-4xl lg:max-w-5xl max-h-[92dvh] flex flex-col bg-gradient-to-b from-sky-50 via-white to-amber-50 rounded-2xl sm:rounded-3xl shadow-2xl border-4 border-amber-300 overflow-hidden text-slate-800 transition-all duration-200 ${
           isClosing ? 'scale-95 opacity-0' : 'scale-100 opacity-100 animate-in zoom-in-95 duration-200'
         }`}
       >
@@ -388,10 +466,23 @@ export const GradeSelectionModal: React.FC<GradeSelectionModalProps> = ({
           </div>
 
           {/* Bottom Helpful Guide Banner */}
-          <div className="bg-amber-100/80 border border-amber-300 rounded-xl p-1.5 sm:p-2 text-center flex items-center justify-center gap-1.5 text-[10px] sm:text-[11px] text-amber-950 font-bold shadow-2xs">
-            <span>💡</span>
-            <span>
-              <strong>Mẹo nhỏ:</strong> Bạn luôn có thể tự do bấm chọn đổi khối lớp bất cứ lúc nào ở thanh menu phía trên màn hình!
+          <div className="bg-amber-100/80 border border-amber-300 rounded-xl p-1.5 sm:p-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-amber-950 font-bold shadow-2xs">
+            {/* Học sinh chưa biết cách gõ: mở Sổ tay hướng dẫn ngay tại đây, không cần chọn lớp trước */}
+            {onOpenTypingGuide && (
+              <button
+                type="button"
+                data-testid="grade-open-guide"
+                onClick={onOpenTypingGuide}
+                className="min-h-[40px] px-4 rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-600 hover:from-violet-400 hover:to-fuchsia-500 text-white font-black text-sm flex items-center gap-1.5 shadow-sm transition-all cursor-pointer active:scale-95 focus-visible:outline focus-visible:outline-3 focus-visible:outline-violet-300"
+                title="Xem cách đặt tay, tên các hàng phím, cách gõ dấu tiếng Việt"
+              >
+                <BookOpen className="w-4 h-4 shrink-0" />
+                <span>HƯỚNG DẪN GÕ</span>
+              </button>
+            )}
+            <span className="text-[11px] sm:text-xs text-center">
+              {onOpenTypingGuide && <><strong>Em chưa biết cách gõ?</strong> Bấm nút bên cạnh để xem trước. </>}
+              <strong>Mẹo nhỏ:</strong> Em có thể đổi lớp bất cứ lúc nào ở thanh menu phía trên.
             </span>
           </div>
         </div>

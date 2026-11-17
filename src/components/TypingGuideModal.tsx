@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { KeyboardAnatomy } from './KeyboardAnatomy';
 import {
   X,
   BookOpen,
@@ -20,7 +21,7 @@ import {
 import { TypingInputMode } from '../types/typing';
 import { soundEngine } from '../utils/audio';
 
-export type GuideTabId = 'hand_posture' | 'vietnamese_accent' | 'numpad_typing' | 'video_guide';
+export type GuideTabId = 'keyboard_map' | 'hand_posture' | 'vietnamese_accent' | 'numpad_typing' | 'video_guide';
 
 //Phần video hướng dẫn link chèn video: https://www.youtube.com/watch?v=EOspVY0EDmI
 const TUTORIAL_YOUTUBE_EMBED_URL = 'https://www.youtube.com/embed/EOspVY0EDmI';
@@ -51,6 +52,20 @@ export const TypingGuideModal: React.FC<TypingGuideModalProps> = ({
     }
   }, [isOpen, initialTab]);
 
+  // Nút đóng ghi "(ESC)" nên phải bắt Escape thật. Nghe ở pha capture và chặn lan truyền
+  // để phím Escape không kích hoạt luôn việc "gõ lại từ đầu" của App.
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', handleEsc, true);
+    return () => window.removeEventListener('keydown', handleEsc, true);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleTabChange = (tab: GuideTabId) => {
@@ -65,7 +80,7 @@ export const TypingGuideModal: React.FC<TypingGuideModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/70 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-5xl bg-white border-4 border-amber-400 rounded-3xl shadow-2xl flex flex-col overflow-hidden max-h-[94vh] text-slate-800">
+      <div className="relative w-full max-w-[min(97vw,1760px)] bg-white border-4 border-amber-400 rounded-3xl shadow-2xl flex flex-col overflow-hidden h-[96vh] max-h-[96vh] text-slate-800">
         
         {/* ======================================================== */}
         {/* 1. MODAL HEADER - 3D CHEERFUL, BRIGHT & CHILD-FRIENDLY   */}
@@ -104,12 +119,30 @@ export const TypingGuideModal: React.FC<TypingGuideModalProps> = ({
         {/* ======================================================== */}
         {/* 2. NAVIGATION TABS (TAB 1, TAB 2, TAB 3, TAB 4)          */}
         {/* ======================================================== */}
-        <div className="flex items-center gap-1 sm:gap-2.5 p-2 sm:p-3 bg-amber-50/70 border-b border-amber-200 shrink-0 overflow-x-auto select-none no-scrollbar">
-          {/* TAB 1 */}
+        {/* Màn hẹp (máy tính bảng dọc) xếp 3 cột, tự xuống dòng thay vì cuộn ngang làm tab 5 bị che */}
+        <div className="grid grid-cols-3 lg:grid-cols-5 gap-1.5 sm:gap-2.5 p-2 sm:p-3 bg-amber-50/70 border-b border-amber-200 shrink-0 select-none">
+          {/* TAB 1 (MỚI): LÀM QUEN BÀN PHÍM - tên các hàng phím và các khu vực, học trước khi đặt tay */}
+          <button
+            type="button"
+            onClick={() => handleTabChange('keyboard_map')}
+            className={`min-w-0 py-2 sm:py-2.5 px-3 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer border-2 ${
+              activeTab === 'keyboard_map'
+                ? 'bg-gradient-to-r from-violet-500 to-fuchsia-600 text-white border-violet-400 shadow-lg scale-102 ring-2 ring-violet-300/60'
+                : 'bg-white hover:bg-violet-50 text-slate-700 border-slate-200 hover:border-violet-300 shadow-xs'
+            }`}
+          >
+            <span className="text-base sm:text-lg">⌨️</span>
+            <div className="text-left leading-tight">
+              <span className="block text-[10px] opacity-90 uppercase tracking-wide">Tab 1</span>
+              <span className="truncate">Làm Quen Bàn Phím</span>
+            </div>
+          </button>
+
+          {/* TAB 2 */}
           <button
             type="button"
             onClick={() => handleTabChange('hand_posture')}
-            className={`flex-1 min-w-[140px] sm:min-w-[160px] py-2 sm:py-2.5 px-3 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer border-2 ${
+            className={`min-w-0 py-2 sm:py-2.5 px-3 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer border-2 ${
               activeTab === 'hand_posture'
                 ? 'bg-gradient-to-r from-sky-500 to-indigo-600 text-white border-sky-400 shadow-lg scale-102 ring-2 ring-sky-300/60'
                 : 'bg-white hover:bg-sky-50 text-slate-700 border-slate-200 hover:border-sky-300 shadow-xs'
@@ -117,7 +150,7 @@ export const TypingGuideModal: React.FC<TypingGuideModalProps> = ({
           >
             <span className="text-base sm:text-lg">🖐️</span>
             <div className="text-left leading-tight">
-              <span className="block text-[10px] opacity-90 uppercase tracking-wide">Tab 1</span>
+              <span className="block text-[10px] opacity-90 uppercase tracking-wide">Tab 2</span>
               <span className="truncate">Tư Thế Đặt Tay</span>
             </div>
           </button>
@@ -126,7 +159,7 @@ export const TypingGuideModal: React.FC<TypingGuideModalProps> = ({
           <button
             type="button"
             onClick={() => handleTabChange('vietnamese_accent')}
-            className={`flex-1 min-w-[140px] sm:min-w-[160px] py-2 sm:py-2.5 px-3 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer border-2 ${
+            className={`min-w-0 py-2 sm:py-2.5 px-3 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer border-2 ${
               activeTab === 'vietnamese_accent'
                 ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 border-amber-300 shadow-lg scale-102 ring-2 ring-amber-300/60'
                 : 'bg-white hover:bg-amber-50 text-slate-700 border-slate-200 hover:border-amber-300 shadow-xs'
@@ -134,7 +167,7 @@ export const TypingGuideModal: React.FC<TypingGuideModalProps> = ({
           >
             <span className="text-base sm:text-lg">🇻🇳</span>
             <div className="text-left leading-tight">
-              <span className="block text-[10px] opacity-90 uppercase tracking-wide">Tab 2</span>
+              <span className="block text-[10px] opacity-90 uppercase tracking-wide">Tab 3</span>
               <span className="truncate">Gõ Dấu Tiếng Việt</span>
             </div>
           </button>
@@ -143,7 +176,7 @@ export const TypingGuideModal: React.FC<TypingGuideModalProps> = ({
           <button
             type="button"
             onClick={() => handleTabChange('numpad_typing')}
-            className={`flex-1 min-w-[140px] sm:min-w-[160px] py-2 sm:py-2.5 px-3 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer border-2 ${
+            className={`min-w-0 py-2 sm:py-2.5 px-3 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer border-2 ${
               activeTab === 'numpad_typing'
                 ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white border-emerald-400 shadow-lg scale-102 ring-2 ring-emerald-300/60'
                 : 'bg-white hover:bg-emerald-50 text-slate-700 border-slate-200 hover:border-emerald-300 shadow-xs'
@@ -151,7 +184,7 @@ export const TypingGuideModal: React.FC<TypingGuideModalProps> = ({
           >
             <span className="text-base sm:text-lg">🖩</span>
             <div className="text-left leading-tight">
-              <span className="block text-[10px] opacity-90 uppercase tracking-wide">Tab 3</span>
+              <span className="block text-[10px] opacity-90 uppercase tracking-wide">Tab 4</span>
               <span className="truncate">Phím Số Numpad</span>
             </div>
           </button>
@@ -160,7 +193,7 @@ export const TypingGuideModal: React.FC<TypingGuideModalProps> = ({
           <button
             type="button"
             onClick={() => handleTabChange('video_guide')}
-            className={`flex-1 min-w-[140px] sm:min-w-[160px] py-2 sm:py-2.5 px-3 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer border-2 ${
+            className={`min-w-0 py-2 sm:py-2.5 px-3 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer border-2 ${
               activeTab === 'video_guide'
                 ? 'bg-gradient-to-r from-rose-600 to-red-600 text-white border-rose-400 shadow-lg scale-102 ring-2 ring-rose-300/60'
                 : 'bg-white hover:bg-rose-50 text-slate-700 border-slate-200 hover:border-rose-300 shadow-xs'
@@ -168,7 +201,7 @@ export const TypingGuideModal: React.FC<TypingGuideModalProps> = ({
           >
             <span className="text-base sm:text-lg animate-pulse">🎬</span>
             <div className="text-left leading-tight">
-              <span className="block text-[10px] opacity-90 uppercase tracking-wide">Tab 4</span>
+              <span className="block text-[10px] opacity-90 uppercase tracking-wide">Tab 5</span>
               <span className="truncate">Video Hướng Dẫn</span>
             </div>
           </button>
@@ -182,6 +215,8 @@ export const TypingGuideModal: React.FC<TypingGuideModalProps> = ({
           {/* ====================================================== */}
           {/* TAB 1: TƯ THẾ ĐẶT TAY & HÀNG PHÍM CƠ SỞ                */}
           {/* ====================================================== */}
+          {activeTab === 'keyboard_map' && <KeyboardAnatomy />}
+
           {activeTab === 'hand_posture' && (
             <div className="space-y-6 animate-in fade-in duration-200">
               
