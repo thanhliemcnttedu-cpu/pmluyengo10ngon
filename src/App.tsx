@@ -97,6 +97,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   handsOverlayEnabled: true, // Bàn phím có bàn tay hướng dẫn là mặc định
   handsVisible: true,
   handsOnRealKeyboards: true, // Mọi kiểu bàn phím mặc định bật bàn tay ngón tay ảo
+  startGateEnabled: false, // Mặc định vào bài là tính giờ luôn (bật lại trong Đổi phím / Cài đặt lớp học)
   handsOpacity: 0.75,
   handsStyle: 'realistic',
   showFingerGuideText: true,
@@ -557,6 +558,28 @@ export default function App() {
     }, 3000);
   }, [refreshViewport]);
 
+  // TỰ VÀO LẠI TOÀN MÀN HÌNH: đã thoát toàn màn hình (Esc, nút thu nhỏ...) mà học sinh gõ một phím bất kỳ
+  // -> phóng to lại để thấy đủ bàn phím. Trình duyệt chỉ cho phép khi có thao tác thật (phím vừa bấm).
+  // Trình duyệt/máy không cho phép (bị chặn, đang ở khung nhúng) thì thôi, không thử lại mỗi phím.
+  const autoFullscreenBlockedRef = useRef(false);
+  const autoReenterFullscreen = useCallback(() => {
+    if (autoFullscreenBlockedRef.current || document.fullscreenElement) return;
+    const el = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
+    if (!document.fullscreenEnabled || !el.requestFullscreen) {
+      autoFullscreenBlockedRef.current = true;
+      return;
+    }
+    el.requestFullscreen()
+      .then(() => {
+        setIsFullscreenAdaptive(true);
+        refreshViewport();
+        setTimeout(() => window.dispatchEvent(new Event('resize')), 150);
+      })
+      .catch(() => {
+        autoFullscreenBlockedRef.current = true;
+      });
+  }, [refreshViewport]);
+
   // Xử lý nút lệnh XEM TOÀN MÀN HÌNH: tự động điều chỉnh kích thước và chế độ hiển thị của toàn bộ trang web
   // để tương thích với độ phân giải của máy tính hiện tại
   const handleToggleFullscreenFit = async () => {
@@ -653,6 +676,11 @@ export default function App() {
       // Đang dùng kiểu 108 phím thì nhớ lựa chọn này cho lần chọn kiểu 108 phím sau
       return s.handsOverlayEnabled ? { ...s, handsVisible: next } : { ...s, handsVisible: next, handsOnRealKeyboards: next };
     });
+  }, []);
+
+  // Bật/tắt màn chờ "BẮT ĐẦU GÕ" (đếm 3-2-1)
+  const toggleStartGate = useCallback(() => {
+    setSettings((s) => ({ ...s, startGateEnabled: !s.startGateEnabled }));
   }, []);
 
   // Audio settings sync
@@ -1232,7 +1260,7 @@ export default function App() {
               isBackspace: true,
             },
           ]);
-          if (settings.soundEnabled) soundEngine.playMechanicalClick();
+          if (settings.soundEnabled) soundEngine.playMechanicalClick('backspace');
           return;
         }
 
@@ -1299,7 +1327,7 @@ export default function App() {
               expectedKey: currentStep.keyChar === ' ' ? '␣' : currentStep.keyChar,
             },
           ]);
-          if (settings.soundEnabled) soundEngine.playErrorBoop();
+          if (settings.soundEnabled) soundEngine.playWrongKey();
           return;
         }
       }
@@ -1322,7 +1350,7 @@ export default function App() {
                 isBackspace: true,
               },
             ]);
-            if (settings.soundEnabled) soundEngine.playMechanicalClick();
+            if (settings.soundEnabled) soundEngine.playMechanicalClick('backspace');
           }
         };
 
@@ -1607,7 +1635,9 @@ export default function App() {
           if (settings.soundType === 'bubble') {
             soundEngine.playBubblePop();
           } else {
-            soundEngine.playMechanicalClick(currentStep.keyChar === ' ');
+            soundEngine.playMechanicalClick(
+              currentStep.keyChar === ' ' ? 'space' : currentStep.keyChar === 'Enter' ? 'enter' : 'normal'
+            );
           }
         }
 
@@ -1668,9 +1698,35 @@ export default function App() {
           setCaseMistakeType(null);
           setCaseMistakeMessage(null);
         }
-        if (settings.soundEnabled) soundEngine.playErrorBoop();
+        if (settings.soundEnabled) soundEngine.playWrongKey();
       }
   }
+
+  // TẮT màn chờ (mặc định): bài đang ở trạng thái chờ và không có hộp nào che -> vào bài, đồng hồ chạy ngay.
+  // Có hộp đang mở (chọn lớp, nhắc Unikey, chọn bài...) thì đợi đóng hộp rồi mới tính giờ.
+  const anyBlockingModalOpen =
+    isUnikeyNoticeOpen ||
+    isAuthorDonateModalOpen ||
+    isCustomTextModalOpen ||
+    isTeacherModalOpen ||
+    isGameModalOpen ||
+    isCurriculumModalOpen ||
+    isPostureModalOpen ||
+    isVietnameseGuideOpen ||
+    isNumpadModalOpen ||
+    isThemeModalOpen ||
+    isGradeSelectModalOpen ||
+    isTypingGuideOpen ||
+    isAiModalOpen;
+  useEffect(() => {
+    if (settings.startGateEnabled || isCompleted || anyBlockingModalOpen) return;
+    if (typingPhaseRef.current !== 'ready') return;
+    const t = Date.now();
+    typingPhaseRef.current = 'running';
+    setTypingPhase('running');
+    setStartTime(t);
+    setClockNow(t);
+  }, [settings.startGateEnabled, isCompleted, anyBlockingModalOpen, typingPhase]);
 
   // Đồng hồ: cập nhật mỗi 0,5 giây khi đang gõ, dừng khi xong bài
   useEffect(() => {
@@ -1720,6 +1776,11 @@ export default function App() {
       if (e.ctrlKey || e.metaKey || (e.altKey && !e.getModifierState?.('AltGraph'))) {
         return;
       }
+      // Đã thoát toàn màn hình mà gõ phím -> tự phóng to lại (trừ phím Esc dùng để thoát)
+      if (!e.repeat && e.key !== 'Escape' && !document.fullscreenElement) {
+        autoReenterFullscreen();
+      }
+
       // Giữ phím lâu sinh nhiều sự kiện lặp -> không tính thành nhiều lỗi
       if (e.repeat && e.key.length === 1) {
         e.preventDefault();
@@ -1787,15 +1848,21 @@ export default function App() {
       });
     };
 
+    // Rời cửa sổ khi đang đè phím (Alt+Tab...) sẽ không nhận được keyup -> xoá hết để Shift không bị "kẹt" sáng
+    const handleBlur = () => setPressedKeys(new Set());
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
 
     return () => {
+      window.removeEventListener('blur', handleBlur);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
   }, [
     handleInputEvent,
+    autoReenterFullscreen,
     startTyping,
     isCompleted,
     isUnikeyNoticeOpen,
@@ -2327,7 +2394,7 @@ export default function App() {
             `}
           >
             {/* Màn chờ "BẮT ĐẦU GÕ" + đếm 3-2-1 (đồng hồ chỉ chạy sau khi đếm xong) */}
-            {!isCompleted && typingPhase !== 'running' && (
+            {!isCompleted && typingPhase !== 'running' && (settings.startGateEnabled || typingPhase === 'countdown') && (
               <StartGate
                 phase={typingPhase}
                 count={countdown}
@@ -2608,6 +2675,8 @@ export default function App() {
               onToggleTextbook: () => setIsRightColumnVisible((prev) => !prev),
               handsVisible,
               onToggleHands: toggleHandsVisible,
+              startGateEnabled: !!settings.startGateEnabled,
+              onToggleStartGate: toggleStartGate,
               soundType: settings.soundType,
               onSetSoundType: (t) => setSettings((st) => ({ ...st, soundType: t })),
               // Các hộp dưới đây nằm ngoài Cổng: đóng Cổng trước để hộp hiện lên trên cùng
@@ -2752,6 +2821,8 @@ export default function App() {
         handsVisible={handsVisible}
         onToggleHands={toggleHandsVisible}
         isGuideLayout={settings.handsOverlayEnabled}
+        startGateEnabled={!!settings.startGateEnabled}
+        onToggleStartGate={toggleStartGate}
       />
 
       {/* AI Smart Auto-Fit Viewport Details Modal */}

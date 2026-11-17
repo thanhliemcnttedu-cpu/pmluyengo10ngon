@@ -135,6 +135,8 @@ interface TeacherLessonModalProps {
     onToggleTextbook: () => void;
     handsVisible: boolean;
     onToggleHands: () => void;
+    startGateEnabled?: boolean;
+    onToggleStartGate?: () => void;
     soundType: 'mechanical' | 'bubble' | string;
     onSetSoundType: (t: 'mechanical' | 'bubble') => void;
     onOpenCustomText: () => void;
@@ -2449,6 +2451,17 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                         on: classroomSettings.handsVisible,
                         onClick: classroomSettings.onToggleHands,
                       },
+                      ...(classroomSettings.onToggleStartGate
+                        ? [
+                            {
+                              key: 'startGate',
+                              title: '⏱ Màn chờ "BẮT ĐẦU GÕ"',
+                              desc: 'Bật: chọn bài xong hiện nút BẮT ĐẦU GÕ và đếm 3-2-1. Tắt (mặc định): vào bài là tính giờ ngay.',
+                              on: !!classroomSettings.startGateEnabled,
+                              onClick: classroomSettings.onToggleStartGate,
+                            },
+                          ]
+                        : []),
                       {
                         key: 'textbook',
                         title: '📖 Cột Sách giáo khoa',

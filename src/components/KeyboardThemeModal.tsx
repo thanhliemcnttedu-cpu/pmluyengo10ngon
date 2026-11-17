@@ -13,6 +13,9 @@ interface KeyboardThemeModalProps {
   onToggleHands?: () => void;
   /** Đang dùng kiểu bàn phím hướng dẫn (phím to) */
   isGuideLayout?: boolean;
+  /** Màn chờ "BẮT ĐẦU GÕ" + đếm 3-2-1 */
+  startGateEnabled?: boolean;
+  onToggleStartGate?: () => void;
 }
 
 export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
@@ -23,6 +26,8 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
   handsVisible,
   onToggleHands,
   isGuideLayout,
+  startGateEnabled,
+  onToggleStartGate,
 }) => {
   const [filterTab, setFilterTab] = useState<'all' | 'hands' | 'real' | 'system'>('all');
 
@@ -152,6 +157,23 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
                   : 'Dùng được cho mọi kiểu bàn phím. Với bàn phím 108 phím, bàn tay chỉ hiện ở khu vực chính.'}
               </p>
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+            {onToggleStartGate && (
+              <button
+                type="button"
+                onClick={onToggleStartGate}
+                data-testid="theme-startgate-toggle"
+                aria-pressed={!!startGateEnabled}
+                title="Bật: chọn bài xong hiện nút BẮT ĐẦU GÕ và đếm 3-2-1. Tắt: vào bài là tính giờ ngay."
+                className={`min-h-[44px] px-4 rounded-full text-sm font-black cursor-pointer transition-colors border-2 ${
+                  startGateEnabled
+                    ? 'bg-emerald-500 text-white border-emerald-600 hover:bg-emerald-400'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                {startGateEnabled ? '⏱ Màn chờ Bắt đầu gõ: Bật' : '⏱ Màn chờ Bắt đầu gõ: Tắt'}
+              </button>
+            )}
             <button
               type="button"
               onClick={onToggleHands}
@@ -165,6 +187,7 @@ export const KeyboardThemeModal: React.FC<KeyboardThemeModalProps> = ({
             >
               {handsVisible ? '✋ Bàn tay: Bật' : 'Bàn tay: Tắt'}
             </button>
+            </div>
           </div>
         )}
 

@@ -119,62 +119,142 @@ class SoundEngine {
     }
   }
 
-  // Realistic mechanical switch click
-  public playMechanicalClick(isSpace: boolean = false) {
+  // Bộ đệm tiếng ồn trắng dùng chung (tạo 1 lần) cho tiếng "tách/cộp" của phím cơ
+  private noiseBuf: AudioBuffer | null = null;
+  private getNoise(): AudioBuffer | null {
+    if (!this.ctx) return null;
+    if (!this.noiseBuf || this.noiseBuf.sampleRate !== this.ctx.sampleRate) {
+      const len = Math.floor(this.ctx.sampleRate * 0.25);
+      const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      this.noiseBuf = buf;
+    }
+    return this.noiseBuf;
+  }
+
+  // Một lớp tiếng ồn ngắn đi qua bộ lọc dải: mô phỏng tiếng nhựa/kim loại va chạm
+  private noiseHit(dest: AudioNode, t: number, freq: number, q: number, gain: number, decay: number) {
+    if (!this.ctx) return;
+    const buf = this.getNoise();
+    if (!buf) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = 0.9 + Math.random() * 0.2;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.setValueAtTime(freq, t);
+    f.Q.setValueAtTime(q, t);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.0015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    src.connect(f);
+    f.connect(g);
+    g.connect(dest);
+    src.start(t, Math.random() * 0.15);
+    src.stop(t + decay + 0.01);
+  }
+
+  // Một lớp âm trầm tắt nhanh: tiếng "cộp" của vỏ bàn phím / keycap chạm đáy
+  private toneHit(dest: AudioNode, t: number, from: number, to: number, gain: number, decay: number) {
+    if (!this.ctx) return;
+    const o = this.ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(from, t);
+    o.frequency.exponentialRampToValueAtTime(to, t + decay);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    o.connect(g);
+    g.connect(dest);
+    o.start(t);
+    o.stop(t + decay + 0.01);
+  }
+
+  /**
+   * Tiếng phím cơ chân thực (switch kiểu clicky):
+   * nhấn = tiếng "tách" của lá công tắc + tiếng "cộp" keycap chạm đáy + cộng hưởng vỏ;
+   * ~70-100ms sau là tiếng nhả phím nhỏ hơn. Mỗi lần bấm lệch nhẹ cao độ/âm lượng cho tự nhiên.
+   * Phím to (Cách, Enter, Xóa) trầm và dày hơn, có tiếng rung thanh cân bằng.
+   */
+  public playMechanicalClick(kind: boolean | 'normal' | 'space' | 'enter' | 'backspace' = false) {
     if (this.isMuted) return;
     try {
       this.initContext();
       if (!this.ctx) return;
+      const k = kind === true ? 'space' : kind === false ? 'normal' : kind;
+      const big = k !== 'normal';
+      const t = this.ctx.currentTime + 0.002;
+      const jitter = 0.94 + Math.random() * 0.12; // lệch cao độ ±6%
+      const level = this.volume * (0.85 + Math.random() * 0.2) * (big ? 1.15 : 1);
 
-      const t = this.ctx.currentTime;
-      const masterGain = this.ctx.createGain();
-      masterGain.gain.setValueAtTime(this.volume * (isSpace ? 0.9 : 0.6), t);
-      masterGain.connect(this.ctx.destination);
+      const master = this.ctx.createGain();
+      master.gain.setValueAtTime(level, t);
+      // Cắt bớt tần số quá cao để tiếng không chói
+      const tone = this.ctx.createBiquadFilter();
+      tone.type = 'lowpass';
+      tone.frequency.setValueAtTime(big ? 6500 : 9000, t);
+      master.connect(tone);
+      tone.connect(this.ctx.destination);
 
-      // 1. High crisp tactile click (transient snap)
-      const osc = this.ctx.createOscillator();
-      const clickGain = this.ctx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(isSpace ? 480 : 1800, t);
-      osc.frequency.exponentialRampToValueAtTime(isSpace ? 80 : 220, t + 0.04);
-      
-      clickGain.gain.setValueAtTime(0.7, t);
-      clickGain.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
-      
-      osc.connect(clickGain);
-      clickGain.connect(masterGain);
-      osc.start(t);
-      osc.stop(t + 0.05);
+      // 1. "Tách": lá công tắc bật (rất ngắn, cao)
+      this.noiseHit(master, t, 4200 * jitter, 2.2, big ? 0.35 : 0.55, 0.012);
+      // 2. "Cộp": keycap chạm đáy (dải trung)
+      this.noiseHit(master, t + 0.004, (big ? 1100 : 1900) * jitter, 1.3, big ? 0.75 : 0.6, big ? 0.05 : 0.035);
+      // 3. Cộng hưởng vỏ bàn phím (trầm)
+      this.toneHit(master, t + 0.004, (big ? 170 : 260) * jitter, big ? 70 : 110, big ? 0.55 : 0.32, big ? 0.09 : 0.06);
+      // 4. Phím to: thanh cân bằng rung nhẹ
+      if (big) this.noiseHit(master, t + 0.012, 520 * jitter, 2.5, 0.22, 0.07);
+      // 5. Nhả phím: tiếng nhỏ hơn, cao hơn một chút
+      const up = t + 0.07 + Math.random() * 0.03;
+      this.noiseHit(master, up, (big ? 1500 : 2600) * jitter, 1.6, big ? 0.22 : 0.18, 0.025);
+      this.toneHit(master, up, (big ? 200 : 320) * jitter, 140, 0.08, 0.035);
+    } catch {
+      // AudioContext error suppressed
+    }
+  }
 
-      // 2. Bottom-out thud (mechanical plastic housing resonance)
-      const thudOsc = this.ctx.createOscillator();
-      const thudGain = this.ctx.createGain();
-      thudOsc.type = 'sine';
-      thudOsc.frequency.setValueAtTime(isSpace ? 110 : 240, t);
-      thudOsc.frequency.exponentialRampToValueAtTime(45, t + 0.06);
+  /**
+   * Gõ SAI: vẫn có tiếng phím (học sinh đã bấm thật) nhưng đục hơn, kèm hai nốt "ơ-ơ" đi xuống
+   * nhẹ nhàng, không gây giật mình.
+   */
+  public playWrongKey() {
+    if (this.isMuted) return;
+    try {
+      this.initContext();
+      if (!this.ctx) return;
+      const t = this.ctx.currentTime + 0.002;
+      const master = this.ctx.createGain();
+      master.gain.setValueAtTime(this.volume, t);
+      master.connect(this.ctx.destination);
 
-      thudGain.gain.setValueAtTime(0.5, t);
-      thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.065);
+      // Tiếng phím đục (keycap chạm đáy, không có tiếng "tách")
+      this.noiseHit(master, t, 900, 1.2, 0.45, 0.05);
+      this.toneHit(master, t, 200, 90, 0.35, 0.08);
 
-      thudOsc.connect(thudGain);
-      thudGain.connect(masterGain);
-      thudOsc.start(t);
-      thudOsc.stop(t + 0.07);
-
-      // 3. Subtle keycap spring release ping
-      if (!isSpace) {
-        const pingOsc = this.ctx.createOscillator();
-        const pingGain = this.ctx.createGain();
-        pingOsc.type = 'sine';
-        pingOsc.frequency.setValueAtTime(2900, t + 0.015);
-        pingGain.gain.setValueAtTime(0.08, t + 0.015);
-        pingGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
-
-        pingOsc.connect(pingGain);
-        pingGain.connect(masterGain);
-        pingOsc.start(t + 0.015);
-        pingOsc.stop(t + 0.07);
-      }
+      // Hai nốt "ơ-ơ" đi xuống (Mi -> Đô), âm sắc tròn
+      const notes: Array<[number, number, number]> = [
+        [659.25, 0.03, 0.12],
+        [523.25, 0.17, 0.2],
+      ];
+      notes.forEach(([freq, offset, dur]) => {
+        if (!this.ctx) return;
+        const nt = t + offset;
+        const o = this.ctx.createOscillator();
+        o.type = 'triangle';
+        o.frequency.setValueAtTime(freq, nt);
+        o.frequency.exponentialRampToValueAtTime(freq * 0.94, nt + dur);
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0.0001, nt);
+        g.gain.exponentialRampToValueAtTime(0.28, nt + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, nt + dur);
+        o.connect(g);
+        g.connect(master);
+        o.start(nt);
+        o.stop(nt + dur + 0.02);
+      });
     } catch {
       // AudioContext error suppressed
     }

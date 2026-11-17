@@ -92,6 +92,8 @@ export const Keyboard: React.FC<KeyboardProps> = ({
     symbolGuideInfo?.targetShiftCodes?.[0] ??
     (targetKey?.finger?.startsWith('right') ? 'ShiftLeft' : 'ShiftRight');
   const isKeyPressed = (code: string) => pressedKeys.has(code);
+  // Học sinh đang đè Shift: đã chọn cách gõ chữ hoa bằng Shift -> thôi gợi ý Caps Lock
+  const shiftHeld = pressedKeys.has('ShiftLeft') || pressedKeys.has('ShiftRight');
 
   // Keyboard LED statuses
   const [internalCapsLockActive, setInternalCapsLockActive] = useState<boolean>(false);
@@ -406,12 +408,14 @@ export const Keyboard: React.FC<KeyboardProps> = ({
         targetBgColor = fingerInfo ? fingerInfo.color : '#0284c7';
       }
       // Lưu ý: CapsLock không tác dụng với ký tự đặc biệt hàng phím số nên không highlight CapsLock
-    } else if (isShiftTarget && (key.code === 'ShiftLeft' || key.code === 'ShiftRight') && (!guideMode || key.code === guideShiftCode)) {
-      // Chế độ hướng dẫn: chỉ tô phím Shift TAY ĐỐI DIỆN (khớp với ngón út đang giữ Shift)
+    } else if (isShiftTarget && key.code === guideShiftCode) {
+      // Mọi kiểu bàn phím: chỉ tô/nổi phím Shift TAY ĐỐI DIỆN (khớp với ngón út bàn tay ảo đang giữ Shift),
+      // phím Shift còn lại để nguyên
       isTarget = true;
       targetLabelText = 'GIỮ SHIFT ⇧';
       targetBgColor = '#ec4899'; // Pink
-    } else if (isShiftTarget && key.code === 'CapsLock') {
+    } else if (isShiftTarget && key.code === 'CapsLock' && !shiftHeld) {
+      // Cách thay thế: bấm Caps Lock (Caps Lock bật rồi thì App đã bỏ yêu cầu Shift nên Shift cũng thôi sáng)
       isTarget = true;
       targetLabelText = 'HOẶC CAPS ⇪';
       targetBgColor = '#8b5cf6'; // Violet
@@ -448,7 +452,7 @@ export const Keyboard: React.FC<KeyboardProps> = ({
     }
 
     // Chế độ hướng dẫn: phím cần bấm tô xanh lá, phím Shift cần giữ tô hồng (đồng bộ với viền ngón tay)
-    const guideTargetBg = isDualShiftKey || (isShiftTarget && (key.code === 'ShiftLeft' || key.code === 'ShiftRight'))
+    const guideTargetBg = isDualShiftKey || (isShiftTarget && key.code === guideShiftCode)
       ? '#f9a8d4'
       : key.code === 'CapsLock'
       ? '#c4b5fd' // Caps Lock cần bấm để tắt chữ hoa
