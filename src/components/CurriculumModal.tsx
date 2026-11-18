@@ -5,6 +5,7 @@ import { X, CheckCircle2, Star, Sparkles, BookOpen, UserCheck, Image as ImageIco
 
 export const TEACHER_CODE_KEY = 'typing_kids_teacher_code_filter_v1';
 import { isSystemLesson, lessonOwnerKey } from '../utils/lessonNumbering';
+import { fetchTeacherAssignments, type TeacherGradeAssignment } from '../lib/supabase';
 
 /** Chuẩn hoá mã cô giáo học sinh gõ: "gv1", "GV001", "1", "001" -> "GV001"; "admin" -> "ADMIN" */
 export function normalizeTeacherCode(raw: string): string {
@@ -88,6 +89,8 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
     onTeacherCodeChange?.(c);
   };
   const [codeError, setCodeError] = useState('');
+  // Bài cô giáo (theo mã) đã giao cho từng lớp: tách khỏi bài quản trị giao
+  const [codeAssignments, setCodeAssignments] = useState<Record<number, TeacherGradeAssignment>>({});
   const [filterTab, setFilterTab] = useState<'all' | '3' | '4' | '5' | 'poems' | 'numpad' | 'teacher'>(
     initialGradeFilter ? String(initialGradeFilter) as any : 'all'
   );
@@ -98,6 +101,48 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
       setFilterTab(initialGradeFilter && [3, 4, 5].includes(initialGradeFilter) ? (String(initialGradeFilter) as '3' | '4' | '5') : 'all');
     }
   }, [isOpen, initialGradeFilter]);
+
+  // Áp mã cô giáo: chỉ còn bộ bài của cô, nhớ mã trên máy
+  const applyCodeValue = (code: string) => {
+    setCodeError('');
+    setTeacherCode(code);
+    setCodeInput('');
+    setFilterTab('all');
+    setSubGrade('all');
+    try {
+      localStorage.setItem(TEACHER_CODE_KEY, code);
+    } catch {
+      // Bỏ qua khi bộ nhớ trang bị chặn
+    }
+  };
+
+  // TỰ TÌM KHI GÕ MÃ: gõ xong (dừng tay ~0,7 giây) là tự lọc, không cần bấm nút hay Enter
+  useEffect(() => {
+    const raw = codeInput.trim();
+    if (!isOpen || !raw) return;
+    const t = window.setTimeout(() => {
+      const all = allLessons && allLessons.length > 0 ? allLessons : [...teacherLessons, ...LESSONS];
+      const code = normalizeTeacherCode(raw);
+      if (code && all.some((l) => l && lessonOfCode(l, code))) applyCodeValue(code);
+      else if (code) setCodeError(`Chưa có bài nào của mã ${code}. Em kiểm tra lại mã cô giáo đã cho nhé.`);
+    }, 700);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codeInput, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !teacherCode || teacherCode === 'ADMIN') {
+      setCodeAssignments({});
+      return;
+    }
+    let alive = true;
+    fetchTeacherAssignments(teacherCode).then((a) => {
+      if (alive) setCodeAssignments(a);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [isOpen, teacherCode]);
 
   // Esc để đóng: thao tác quen thuộc, nhất là khi nút X bị khuất trên màn hình nhỏ
   useEffect(() => {
@@ -131,16 +176,7 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
       setCodeError(`Chưa có bài nào của mã ${code}. Em kiểm tra lại mã cô giáo đã cho nhé.`);
       return;
     }
-    setCodeError('');
-    setTeacherCode(code);
-    setCodeInput('');
-    setFilterTab('all');
-    setSubGrade('all');
-    try {
-      localStorage.setItem(TEACHER_CODE_KEY, code);
-    } catch {
-      // Bỏ qua khi bộ nhớ trang bị chặn
-    }
+    applyCodeValue(code);
   };
   const clearCode = () => {
     setTeacherCode('');
@@ -181,7 +217,7 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="relative w-full max-w-4xl max-h-[92dvh] bg-white border-4 border-sky-400 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-800">
+      <div data-testid="curriculum-panel" className="relative w-[min(96vw,1500px)] h-[94dvh] bg-white border-4 border-sky-400 rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-800">
         {/* Header - Bright Theme */}
         <div className="flex items-center justify-between p-3.5 sm:p-5 border-b-2 border-sky-100 bg-gradient-to-r from-sky-100 via-sky-50 to-amber-50">
           <div className="flex items-center gap-3">
@@ -254,7 +290,7 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
               >
                 Tìm bài
               </button>
-              <span className="text-[11px] text-slate-500 font-semibold">Gõ mã cô giáo cho rồi bấm Enter</span>
+              <span className="text-xs text-slate-600 font-semibold">Gõ mã cô giáo cho, phần mềm tự tìm bài</span>
             </form>
           )}
           {codeError && (
@@ -385,7 +421,63 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
 
         {/* Content list - Sắp xếp tự động tăng dần từ trái qua phải */}
         <div className="p-3 sm:p-5 overflow-y-auto space-y-3 flex-1 bg-sky-50/20 custom-scrollbar">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {/* BÀI CÔ GIAO THEO MÃ: chỉ hiện khi học sinh đã gõ mã cô giáo */}
+          {teacherCode &&
+            (() => {
+              const wantGrade =
+                filterTab === '3' || filterTab === '4' || filterTab === '5' ? Number(filterTab) : subGrade !== 'all' ? subGrade : null;
+              const blocks = [3, 4, 5]
+                .filter((g) => (wantGrade ? g === wantGrade : true))
+                .map((g) => ({
+                  g,
+                  a: codeAssignments[g],
+                  items: (codeAssignments[g]?.lessonIds || [])
+                    .map((id) => allEffective.find((l) => l && l.id === id))
+                    .filter((l): l is Lesson => !!l),
+                }))
+                .filter((b) => b.items.length > 0);
+              if (blocks.length === 0) return null;
+              return (
+                <section className="rounded-2xl border-2 border-rose-300 bg-rose-50/70 p-3 sm:p-4 space-y-3" data-testid="code-assignments">
+                  <h3 className="text-base sm:text-lg font-black text-rose-900">
+                    📌 Bài {codeTeacherName || `mã ${teacherCode}`} giao
+                  </h3>
+                  {blocks.map((b) => (
+                    <div key={b.g} className="space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-xs font-black">Lớp {b.g}</span>
+                        <span className="text-xs font-bold text-rose-900">{b.items.length} bài</span>
+                        {b.a?.teacherNote && <span className="text-sm text-slate-700 font-semibold">💬 {b.a.teacherNote}</span>}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-2">
+                        {b.items.map((l, i) => (
+                          <button
+                            key={`giao-${b.g}-${l.id}`}
+                            type="button"
+                            onClick={() => {
+                              onSelectLesson(l);
+                              onClose();
+                            }}
+                            className={`text-left px-3 py-2.5 rounded-xl border-2 bg-white cursor-pointer flex items-center gap-2.5 transition-colors ${
+                              l.id === currentLessonId ? 'border-sky-500 ring-2 ring-sky-300' : 'border-rose-200 hover:border-rose-400'
+                            }`}
+                          >
+                            <span className="w-8 h-8 rounded-lg bg-rose-500 text-white text-sm font-black flex items-center justify-center shrink-0">{i + 1}</span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-sm font-black text-slate-900 line-clamp-2">{l.title}</span>
+                              <span className="text-xs font-semibold text-slate-500">
+                                {completedLessons[l.id] ? `Đã luyện · ${completedLessons[l.id].stars}★` : 'Luyện ngay ➜'}
+                              </span>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </section>
+              );
+            })()}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3 sm:gap-4">
             {sortedLessons.map((lesson, idx) => {
               const isCurrent = lesson.id === currentLessonId;
               const completion = completedLessons[lesson.id];
@@ -402,7 +494,7 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
                     onClose();
                   }}
                   className={`
-                    text-left p-3 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between relative group
+                    text-left p-3.5 sm:p-4 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between relative group
                     ${isCurrent
                       ? 'bg-sky-100/90 border-sky-500 ring-4 ring-sky-300 shadow-md scale-[1.01]'
                       : isDone
@@ -413,7 +505,7 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
                   <div className="flex items-start gap-2.5 w-full">
                     {/* HUY HIỆU SỐ THỨ TỰ BÀI HỌC NỔI BẬT */}
                     <div className={`
-                      w-10 h-10 rounded-xl flex flex-col items-center justify-center shrink-0 shadow-xs font-black
+                      w-12 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 shadow-xs font-black
                       ${isCurrent
                         ? 'bg-sky-600 text-white'
                         : isDone
@@ -424,10 +516,10 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
                         ? 'bg-teal-500 text-white'
                         : 'bg-purple-500 text-white'}
                     `}>
-                      <span className="text-[8px] uppercase tracking-tighter opacity-90 leading-none">
+                      <span className="text-[10px] uppercase tracking-tighter opacity-90 leading-none">
                         {isNumpad ? 'NUM' : 'BÀI'}
                       </span>
-                      <span className="text-sm font-black leading-tight">
+                      <span className="text-lg font-black leading-tight">
                         {isNumpad ? (lessonNum >= 1000 ? lessonNum - 1000 : lessonNum) : lessonNum}
                       </span>
                     </div>
@@ -435,7 +527,7 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         {lesson.gradeLevel && (
-                          <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-black border ${
+                          <span className={`px-2 py-0.5 rounded-full text-[11px] font-black border ${
                             lesson.gradeLevel === 3
                               ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
                               : lesson.gradeLevel === 4
@@ -446,30 +538,30 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
                           </span>
                         )}
                         {lesson.imageUrl && (
-                          <span className="px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 text-[9px] font-bold flex items-center gap-0.5 border border-amber-200">
-                            <ImageIcon className="w-2.5 h-2.5 text-amber-600" />
+                          <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 text-[11px] font-bold flex items-center gap-0.5 border border-amber-200">
+                            <ImageIcon className="w-3 h-3 text-amber-600" />
                             <span>Ảnh SGK</span>
                           </span>
                         )}
                       </div>
 
-                      <h4 className="text-xs font-black text-slate-900 mt-1 line-clamp-1 group-hover:text-sky-700 transition-colors">
+                      <h4 title={lesson.title} className="text-sm sm:text-base font-black text-slate-900 mt-1 leading-snug line-clamp-2 group-hover:text-sky-700 transition-colors">
                         {lesson.title}
                       </h4>
 
-                      <p className="text-[11px] text-slate-500 line-clamp-1 mt-0.5">
+                      <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">
                         {lesson.subtitle || lesson.descriptionVi}
                       </p>
 
                       {lesson.authorTeacher && (
-                        <span className="text-[10px] text-emerald-700 font-bold block mt-0.5 truncate">
+                        <span className="text-xs text-emerald-700 font-bold block mt-0.5 truncate">
                           👩‍🏫 {lesson.authorTeacher}
                         </span>
                       )}
                     </div>
                   </div>
 
-                  <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-bold w-full">
+                  <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 font-bold w-full">
                     <span className="text-slate-600">🎯 {lesson.targetWpm} WPM</span>
                     {isDone ? (
                       <div className="flex items-center gap-0.5 text-amber-500 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">

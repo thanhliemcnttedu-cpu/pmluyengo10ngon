@@ -260,6 +260,85 @@ export async function saveAssignmentToSupabase(assignment: GradeAssignment): Pro
 }
 
 // ----------------------------------------------------------------------------
+// 2B. BÀI GIAO THEO TỪNG GIÁO VIÊN (bảng teacher_assignments, tách khỏi bài giao của quản trị)
+// Học sinh gõ mã cô giáo thì thấy "Bài cô … giao"; chỉ chính giáo viên đó ghi được (quy tắc trên máy chủ).
+// ----------------------------------------------------------------------------
+export interface TeacherGradeAssignment {
+  ownerCode: string;
+  gradeLevel: number;
+  lessonIds: string[];
+  teacherName?: string;
+  teacherNote?: string;
+  updatedAt?: string;
+}
+
+/** Bài giao của một mã giáo viên, theo khối lớp. Lỗi / chưa có bảng: trả {} (không làm hỏng màn hình học sinh) */
+export async function fetchTeacherAssignments(ownerCode: string): Promise<Record<number, TeacherGradeAssignment>> {
+  const out: Record<number, TeacherGradeAssignment> = {};
+  if (!ownerCode) return out;
+  try {
+    const { data, error } = await supabase
+      .from('teacher_assignments')
+      .select('owner_code, grade_level, lesson_ids, teacher_name, teacher_note, updated_at')
+      .eq('owner_code', ownerCode);
+    if (error || !Array.isArray(data)) return out;
+    for (const r of data as any[]) {
+      out[r.grade_level] = {
+        ownerCode: r.owner_code,
+        gradeLevel: r.grade_level,
+        lessonIds: Array.isArray(r.lesson_ids) ? r.lesson_ids.filter(Boolean) : [],
+        teacherName: r.teacher_name || undefined,
+        teacherNote: r.teacher_note || undefined,
+        updatedAt: r.updated_at || undefined,
+      };
+    }
+  } catch {
+    // Mất mạng: coi như chưa có bài giao
+  }
+  return out;
+}
+
+/** Giáo viên lưu bài giao cho một khối lớp (danh sách rỗng = bỏ giao khối đó) */
+export async function saveTeacherAssignment(a: {
+  ownerId: string;
+  ownerCode: string;
+  gradeLevel: number;
+  lessonIds: string[];
+  teacherName?: string;
+  teacherNote?: string;
+}): Promise<CloudWriteResult> {
+  try {
+    if (a.lessonIds.length === 0) {
+      const { error } = await supabase
+        .from('teacher_assignments')
+        .delete()
+        .eq('owner_id', a.ownerId)
+        .eq('grade_level', a.gradeLevel);
+      if (error) return error.code === '42501' ? 'denied' : 'error';
+      return 'ok';
+    }
+    const row = {
+      owner_id: a.ownerId,
+      owner_code: a.ownerCode,
+      grade_level: a.gradeLevel,
+      lesson_ids: a.lessonIds,
+      teacher_name: a.teacherName || null,
+      teacher_note: a.teacherNote || null,
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await supabase.from('teacher_assignments').upsert(row, { onConflict: 'owner_id,grade_level' });
+    if (error) {
+      console.error('Lỗi khi lưu bài giao của giáo viên:', error.message);
+      return error.code === '42501' ? 'denied' : 'error';
+    }
+    return 'ok';
+  } catch (err: any) {
+    console.error('Ngoại lệ khi lưu bài giao của giáo viên:', err?.message);
+    return 'error';
+  }
+}
+
+// ----------------------------------------------------------------------------
 // 3. LƯU TRỮ VÀ TẢI ẢNH SÁCH GIÁO KHOA LÊN SUPABASE (STORAGE BUCKET & DATA URL)
 // ----------------------------------------------------------------------------
 

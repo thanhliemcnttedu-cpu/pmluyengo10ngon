@@ -57,7 +57,13 @@ import {
 } from 'lucide-react';
 import { Lesson, GradeAssignment } from '../types/typing';
 import { compressImageFile } from '../utils/imageUtils';
-import { uploadImageToSupabaseStorage, bulkUpsertLessonsToSupabase } from '../lib/supabase';
+import {
+  uploadImageToSupabaseStorage,
+  bulkUpsertLessonsToSupabase,
+  fetchTeacherAssignments,
+  saveTeacherAssignment,
+  type TeacherGradeAssignment,
+} from '../lib/supabase';
 import { LESSONS } from '../data/lessons';
 import { analyzeTextbookImageInBrowser, OcrError } from '../lib/geminiOcr';
 
@@ -330,6 +336,8 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const [assignSource, setAssignSource] = useState<string>('all');
   const [assignCategory, setAssignCategory] = useState<'all' | 'poems' | 'practice'>('all');
   const [assignLimit, setAssignLimit] = useState(30);
+  // Bài giao của chính giáo viên phụ (theo mã GV…), tách khỏi bài giao của quản trị
+  const [myAssignments, setMyAssignments] = useState<Record<number, TeacherGradeAssignment>>({});
   const [assignNote, setAssignNote] = useState<string>('Các con hoàn thành các bài tập này trước tiết học Tin học tiếp theo nhé!');
   const [assignmentSuccessMsg, setAssignmentSuccessMsg] = useState<string>('');
 
@@ -503,6 +511,24 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     setAuthNotice(SESSION_EXPIRED_NOTICE);
   };
 
+  // Giáo viên phụ: nạp bài giao theo mã của mình rồi đưa vào màn Giao bài
+  useEffect(() => {
+    if (!isOpen || teacherSession?.role !== 'teacher') {
+      setMyAssignments({});
+      return;
+    }
+    let alive = true;
+    fetchTeacherAssignments(teacherSession.code).then((a) => {
+      if (!alive) return;
+      setMyAssignments(a);
+      handleSelectGradeForAssign(selectedGradeForAssign, a);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, teacherSession?.role, teacherSession?.code]);
+
   // Mở Góc Giáo Viên: kiểm tra phiên trên máy chủ còn dùng được không
   useEffect(() => {
     if (!isOpen || !teacherSession || teacherSession.mode === 'offline') return;
@@ -518,7 +544,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
 
   // Giáo viên phụ không có mục Giao bài / Sao lưu / Tài khoản: lỡ đang mở thì về danh sách bài
   useEffect(() => {
-    if (teacherSession?.role === 'teacher' && (activeTab === 'assign' || activeTab === 'backup' || activeTab === 'accounts')) {
+    if (teacherSession?.role === 'teacher' && (activeTab === 'backup' || activeTab === 'accounts')) {
       setActiveTab('manage');
     }
   }, [teacherSession, activeTab]);
@@ -1025,9 +1051,16 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   }, [selectedLessonIdsForAssign, effectiveLessons]);
 
   // Khi đổi khối lớp ở tab Giao bài
-  const handleSelectGradeForAssign = (grade: number) => {
+  const handleSelectGradeForAssign = (grade: number, source?: Record<number, TeacherGradeAssignment>) => {
     setSelectedGradeForAssign(grade);
     setAssignGradeFilter(grade);
+    if (teacherSession?.role === 'teacher') {
+      // Giáo viên phụ: nạp bài đang giao theo mã của mình (chưa giao thì để trống)
+      const mine = (source ?? myAssignments)[grade];
+      setSelectedLessonIdsForAssign(mine ? [...mine.lessonIds] : []);
+      if (mine?.teacherNote) setAssignNote(mine.teacherNote);
+      return;
+    }
     const existing = safeAssignments[grade];
     if (existing) {
       const ids = Array.isArray(existing.lessonIds) && existing.lessonIds.length > 0
@@ -1073,6 +1106,48 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     const safeSelected = validSelectedLessonIds;
     if (safeSelected.length === 0) {
       alert('Cô vui lòng chọn ít nhất 1 bài học để giao cho khối lớp (có thể chọn 2 bài, 3 bài hoặc nhiều bài)!');
+      return;
+    }
+
+    if (teacherSession?.role === 'teacher') {
+      if (!teacherSession.userId) {
+        triggerSaveToast('Giao bài cần có mạng và đăng nhập trực tuyến. Thầy cô đăng nhập lại nhé.');
+        return;
+      }
+      const r = await saveTeacherAssignment({
+        ownerId: teacherSession.userId,
+        ownerCode: teacherSession.code,
+        gradeLevel: selectedGradeForAssign,
+        lessonIds: safeSelected,
+        teacherName: teacherSession.displayName,
+        teacherNote: assignNote,
+      });
+      if (r !== 'ok') {
+        if ((await checkCloudSession(teacherSession)) === 'expired') {
+          expireSession();
+          return;
+        }
+        triggerSaveToast(
+          r === 'denied'
+            ? 'Máy chủ chưa cho lưu bài giao (có thể chưa chạy tệp SQL bài giao theo giáo viên). Thầy cô báo quản trị nhé.'
+            : 'Chưa giao được bài lên máy chủ. Thầy cô kiểm tra kết nối mạng rồi thử lại nhé.'
+        );
+        return;
+      }
+      setMyAssignments((m) => ({
+        ...m,
+        [selectedGradeForAssign]: {
+          ownerCode: teacherSession.code,
+          gradeLevel: selectedGradeForAssign,
+          lessonIds: safeSelected,
+          teacherName: teacherSession.displayName,
+          teacherNote: assignNote,
+        },
+      }));
+      setAssignmentSuccessMsg(
+        `✅ Đã giao ${safeSelected.length} bài cho Lớp ${selectedGradeForAssign} theo mã ${teacherSession.code}. Học sinh bấm Chọn bài, gõ mã ${teacherSession.code} sẽ thấy mục "Bài cô giao".`
+      );
+      setTimeout(() => setAssignmentSuccessMsg(''), 6000);
       return;
     }
 
@@ -1653,11 +1728,19 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
               {[
                 { id: 'manage' as const, icon: <BookOpen className="w-5 h-5" />, label: 'Bài học', extra: String(effectiveLessons.length) },
                 { id: 'editor' as const, icon: <Edit3 className="w-5 h-5" />, label: editingLessonId ? 'Sửa bài' : 'Soạn bài', extra: '' },
+                {
+                  id: 'assign' as const,
+                  icon: <Send className="w-5 h-5" />,
+                  label: 'Giao bài',
+                  extra: isAdminRole
+                    ? allAssignedLessonIds.size > 0 ? String(allAssignedLessonIds.size) : ''
+                    : (() => {
+                        const n = Object.values(myAssignments).reduce((t, a) => t + a.lessonIds.length, 0);
+                        return n > 0 ? String(n) : '';
+                      })(),
+                },
                 ...(isAdminRole
-                  ? [
-                      { id: 'assign' as const, icon: <Send className="w-5 h-5" />, label: 'Giao bài', extra: allAssignedLessonIds.size > 0 ? String(allAssignedLessonIds.size) : '' },
-                      { id: 'backup' as const, icon: <HardDrive className="w-5 h-5" />, label: 'Sao lưu & đồng bộ', extra: '' },
-                    ]
+                  ? [{ id: 'backup' as const, icon: <HardDrive className="w-5 h-5" />, label: 'Sao lưu & đồng bộ', extra: '' }]
                   : []),
                 ...(classroomSettings
                   ? [{ id: 'settings' as const, icon: <SlidersHorizontal className="w-5 h-5" />, label: 'Cài đặt lớp học', extra: '' }]
@@ -2506,16 +2589,20 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
               {/* ========================================================================= */}
               {/* TAB 4: GIAO 1 HOẶC NHIỀU BÀI TẬP CÙNG LÚC CHO KHỐI LỚP (ASSIGN TAB)       */}
               {/* ========================================================================= */}
-              {activeTab === 'assign' && isAdminRole && (() => {
+              {activeTab === 'assign' && !!teacherSession && (() => {
                 // Danh sách bài để chọn: lọc theo khối, nguồn bài, mục và từ khoá; xếp theo lớp rồi số bài
                 const kw = assignSearchKeyword.trim().toLowerCase();
                 const pickList = effectiveLessons
                   .filter((l) => {
                     if (!l) return false;
+                    if (isTeacherRole) {
+                      if (!isMyLesson(l) && !isSystemLesson(l)) return false;
+                      if (assignSource === 'mine' && !isMyLesson(l)) return false;
+                    }
                     if (assignGradeFilter !== 'all' && l.gradeLevel !== assignGradeFilter) return false;
                     if (assignSource === 'system' && !isSystemLesson(l)) return false;
                     if (assignSource === 'teachers' && isSystemLesson(l)) return false;
-                    if (!['all', 'system', 'teachers'].includes(assignSource) && lessonOwnerKey(l) !== assignSource) return false;
+                    if (!['all', 'system', 'teachers', 'mine'].includes(assignSource) && lessonOwnerKey(l) !== assignSource) return false;
                     const isPoem = !!l.isPoemOrStory || l.category === 'poems_stories';
                     if (assignCategory === 'poems' && !isPoem) return false;
                     if (assignCategory === 'practice' && isPoem) return false;
@@ -2551,7 +2638,17 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                       <div>
                         <h3 className="text-lg font-black text-slate-900">🎯 Giao bài cho khối lớp</h3>
                         <p className="text-sm text-slate-600">
-                          Chọn khối lớp, tích chọn các bài ở bên trái, sắp thứ tự ở bên phải rồi bấm <b>Giao bài</b>. Học sinh khối đó thấy ngay ở nút "Bài cô giáo giao".
+                          {isTeacherRole ? (
+                            <>
+                              Bài giao theo mã <b>{teacherSession?.code}</b>: học sinh bấm <b>Chọn bài</b>, gõ mã <b>{teacherSession?.code}</b> sẽ thấy mục
+                              "Bài cô giao" riêng của thầy cô (không lẫn với bài quản trị giao).
+                            </>
+                          ) : (
+                            <>
+                              Chọn khối lớp, tích chọn các bài ở bên trái, sắp thứ tự ở bên phải rồi bấm <b>Giao bài</b>. Học sinh khối đó thấy ngay ở nút
+                              "Bài cô giáo giao".
+                            </>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -2567,7 +2664,9 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                     <div className="grid grid-cols-3 gap-2" role="group" aria-label="Chọn khối lớp">
                       {[3, 4, 5].map((g) => {
                         const isSel = selectedGradeForAssign === g;
-                        const n = Array.isArray(safeAssignments[g]?.lessonIds)
+                        const n = isTeacherRole
+                          ? myAssignments[g]?.lessonIds.length || 0
+                          : Array.isArray(safeAssignments[g]?.lessonIds)
                           ? safeAssignments[g].lessonIds.length
                           : safeAssignments[g]?.lessonId
                           ? 1
@@ -2624,10 +2723,20 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                               data-testid="assign-source"
                               className="h-9 max-w-[220px] px-2 rounded-xl bg-white border border-slate-300 text-sm font-bold cursor-pointer"
                             >
-                              <option value="all">Mọi nguồn bài</option>
-                              <option value="system">Bài hệ thống</option>
-                              <option value="teachers">Bài của giáo viên</option>
-                              {teacherDir.map((t) => (
+                              {isTeacherRole ? (
+                                <>
+                                  <option value="all">Bài của tôi + bài hệ thống</option>
+                                  <option value="mine">Bài của tôi</option>
+                                  <option value="system">Bài hệ thống</option>
+                                </>
+                              ) : (
+                                <>
+                                  <option value="all">Mọi nguồn bài</option>
+                                  <option value="system">Bài hệ thống</option>
+                                  <option value="teachers">Bài của giáo viên</option>
+                                </>
+                              )}
+                              {!isTeacherRole && teacherDir.map((t) => (
                                 <option key={t.code} value={t.code}>
                                   {t.code}
                                   {t.name ? ` – ${t.name}` : ''} ({t.count})
