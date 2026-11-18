@@ -239,6 +239,33 @@ export async function loginTeacher(username: string, password: string): Promise<
 /** Giữ tương thích tên cũ */
 export const loginAdmin = loginTeacher;
 
+/**
+ * Phiên đăng nhập trên máy chủ (Supabase) của người đang đăng nhập còn dùng được không.
+ * Phiên có thể hết dù phần mềm vẫn hiện "đã đăng nhập": mật khẩu vừa bị đổi, lâu không mở máy…
+ * Khi đó máy chủ coi như khách nên chặn lưu bài. Trả:
+ *  - 'ok'      : phiên còn tốt (hoặc tài khoản admin đang dùng kiểu mất mạng, không cần phiên)
+ *  - 'expired' : phiên đã hết → cần đăng nhập lại
+ *  - 'unknown' : không hỏi được máy chủ (mất mạng) → giữ nguyên, không đăng xuất oan
+ */
+export async function checkCloudSession(session: TeacherSession | null): Promise<'ok' | 'expired' | 'unknown'> {
+  if (!session || session.mode === 'offline') return 'ok';
+  try {
+    const { data } = await supabase.auth.getSession();
+    if (!data.session) return 'expired';
+    const { data: u, error } = await withTimeout(supabase.auth.getUser());
+    if (error) return isNetworkError(error) ? 'unknown' : 'expired';
+    if (!u?.user) return 'expired';
+    // Phiên phải đúng là của người đang hiện trên phần mềm
+    if (session.userId && u.user.id !== session.userId) return 'expired';
+    return 'ok';
+  } catch (err) {
+    return isNetworkError(err) ? 'unknown' : 'expired';
+  }
+}
+
+export const SESSION_EXPIRED_NOTICE =
+  'Phiên đăng nhập trên máy chủ đã hết (thường do mật khẩu vừa được đổi hoặc lâu chưa đăng nhập). Thầy cô đăng nhập lại để lưu bài nhé.';
+
 export async function logoutTeacher() {
   saveTeacherSession(null);
   await supabase.auth.signOut().catch(() => undefined);

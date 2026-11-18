@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { stripLessonNumber, isNumpadLesson, displayedLessonNumber, nextLessonNumber } from '../utils/lessonNumbering';
-import { loginTeacher, logoutTeacher, loadTeacherSession, type TeacherSession } from '../lib/adminAuth';
+import {
+  loginTeacher,
+  logoutTeacher,
+  loadTeacherSession,
+  checkCloudSession,
+  SESSION_EXPIRED_NOTICE,
+  type TeacherSession,
+} from '../lib/adminAuth';
 import { TeacherAccountsPanel } from './TeacherAccountsPanel';
 import { ChangeOwnPasswordPanel } from './ChangeOwnPasswordPanel';
 import { AdminPasswordRecovery } from './AdminPasswordRecovery';
@@ -452,7 +459,8 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
       setAuthError('');
       setAuthNotice('');
       setPassword('');
-      setActiveTab('manage');
+      // Đang soạn dở (vd vừa bị hết phiên khi bấm lưu) thì quay lại ô soạn bài để lưu tiếp
+      setActiveTab(text.trim() ? 'editor' : 'manage');
       if (result.session.role === 'teacher') setTeacherName(result.session.displayName);
     } else {
       setAuthError(result.error);
@@ -462,8 +470,33 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const handleLogout = () => {
     setTeacherSession(null);
     setActiveTab('manage');
+    setUsername('');
     logoutTeacher();
   };
+
+  // Phiên đăng nhập trên máy chủ đã hết (vd mật khẩu vừa đổi): đăng xuất và nhắc đăng nhập lại.
+  // Giữ nguyên bài đang soạn và điền sẵn tên đăng nhập.
+  const expireSession = () => {
+    const name = teacherSession?.username || '';
+    setTeacherSession(null);
+    logoutTeacher();
+    setUsername(name);
+    setPassword('');
+    setAuthNotice(SESSION_EXPIRED_NOTICE);
+  };
+
+  // Mở Góc Giáo Viên: kiểm tra phiên trên máy chủ còn dùng được không
+  useEffect(() => {
+    if (!isOpen || !teacherSession || teacherSession.mode === 'offline') return;
+    let alive = true;
+    checkCloudSession(teacherSession).then((r) => {
+      if (alive && r === 'expired') expireSession();
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, teacherSession?.userId]);
 
   // Giáo viên phụ không có mục Giao bài / Sao lưu / Tài khoản: lỡ đang mở thì về danh sách bài
   useEffect(() => {
@@ -796,6 +829,11 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
       const result = await onSaveLesson(updatedLesson);
       if (result === false) {
         setSaveSuccessMsg('');
+        // Lưu hỏng vì phiên đăng nhập đã hết -> báo đúng nguyên nhân và mời đăng nhập lại (bài đang soạn được giữ)
+        if ((await checkCloudSession(teacherSession)) === 'expired') {
+          expireSession();
+          return;
+        }
         triggerSaveToast('Chưa lưu được bài lên máy chủ. Cô kiểm tra kết nối mạng rồi bấm lưu lại nhé.');
         return;
       }
