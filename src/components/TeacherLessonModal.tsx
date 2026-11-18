@@ -162,6 +162,13 @@ interface TeacherLessonModalProps {
   initialEditingLesson?: Lesson | null;
   /** Admin: ghi số thứ tự bài đang hiển thị lên máy chủ */
   onRenumberLessons?: () => Promise<{ changed: number; ok: boolean }>;
+  /** Xoá nhiều bài một lần; trả số bài đã xoá và số bài máy chủ từ chối */
+  onBulkDeleteLessons?: (ids: string[]) => Promise<{ deleted: number; denied: number }>;
+  /** Chuyển nhiều bài sang lớp khác / nhóm khác */
+  onBulkUpdateLessons?: (
+    ids: string[],
+    change: { gradeLevel?: number; group?: 'exercise' | 'poem' | 'prose' }
+  ) => Promise<{ changed: number; ok: boolean }>;
   /** Cài đặt lớp học (trước đây ở menu thả xuống của nút Giáo viên) */
   classroomSettings?: {
     isTextbookVisible: boolean;
@@ -193,6 +200,8 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   onDeleteLesson,
   onResetSystemLesson,
   onRenumberLessons,
+  onBulkDeleteLessons,
+  onBulkUpdateLessons,
   onSelectLesson,
   gradeAssignments = {},
   onAssignLessonToGrade,
@@ -270,6 +279,11 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const [lessonSource, setLessonSource] = useState<string>('all');
   // Xem dần từng 20 bài cho nhẹ khi có hàng trăm bài (30 giáo viên × 20 bài)
   const [visibleLimit, setVisibleLimit] = useState(20);
+  // Tích chọn nhiều bài để xoá / chuyển lớp / chuyển nhóm
+  const [bulkSelected, setBulkSelected] = useState<string[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkGrade, setBulkGrade] = useState<'' | '3' | '4' | '5'>('');
+  const [bulkGroup, setBulkGroup] = useState<'' | 'exercise' | 'poem' | 'prose'>('');
   const subGradeApplies = gradeFilter === 'all' || gradeFilter === 'assigned' || gradeFilter === 'poems';
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   const [sortBy, setSortBy] = useState<'hierarchy' | 'assigned_first' | 'poems_first' | 'title_az' | 'wpm_asc'>('hierarchy');
@@ -1367,6 +1381,77 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     ];
   }, [manageSource, allAssignedLessonIds, searchKeyword, sortBy]);
 
+  const bulkEnabled = !!onBulkDeleteLessons && !!onBulkUpdateLessons;
+  // Mọi bài đang khớp bộ lọc mà tài khoản này được sửa (để "Chọn tất cả")
+  const selectableInView = useMemo(() => {
+    const grouped = gradeFilter === 'all' && subGrade === 'all' && sortBy === 'hierarchy' && !searchKeyword.trim();
+    const list = grouped ? groupedManageLessons.flatMap((g) => g.lessons) : filteredManageLessons;
+    const seen = new Set<string>();
+    return list.filter((l) => l && canModifyLesson(l) && !seen.has(l.id) && !!seen.add(l.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupedManageLessons, filteredManageLessons, gradeFilter, subGrade, sortBy, searchKeyword, isAdminRole, teacherSession?.userId]);
+  // Bỏ khỏi lựa chọn các bài không còn (đã xoá, đổi tài khoản)
+  useEffect(() => {
+    setBulkSelected((prev) => {
+      const next = prev.filter((id) => effectiveLessons.some((l) => l && l.id === id && canModifyLesson(l)));
+      return next.length === prev.length ? prev : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveLessons, isAdminRole, teacherSession?.userId]);
+  const toggleBulk = (id: string) =>
+    setBulkSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const allInViewSelected = selectableInView.length > 0 && selectableInView.every((l) => bulkSelected.includes(l.id));
+  // Thứ tự xử lý theo đúng thứ tự đang hiện, để bài chuyển lớp giữ nguyên thứ tự trước sau
+  const orderedBulkIds = () => {
+    const order = sortLessons(effectiveLessons.filter((l) => l && bulkSelected.includes(l.id)));
+    return order.map((l) => l.id);
+  };
+  const BULK_GROUP_LABEL = { exercise: 'Luyện phím', poem: 'Thơ SGK', prose: 'Văn SGK' } as const;
+
+  const runBulkDelete = async () => {
+    if (!onBulkDeleteLessons || bulkSelected.length === 0) return;
+    const assigned = bulkSelected.filter((id) => allAssignedLessonIds.has(id)).length;
+    const msg =
+      `Xoá ${bulkSelected.length} bài đã chọn? Thao tác này không hoàn tác được.` +
+      (assigned > 0 ? `\n\nLưu ý: ${assigned} bài trong số này đang được giao cho học sinh.` : '');
+    if (!window.confirm(msg)) return;
+    setBulkBusy(true);
+    try {
+      const r = await onBulkDeleteLessons(orderedBulkIds());
+      setBulkSelected([]);
+      triggerSaveToast(
+        r.denied > 0
+          ? `Đã xoá ${r.deleted} bài. ${r.denied} bài máy chủ không cho xoá (không do tài khoản này tạo).`
+          : `🗑️ Đã xoá ${r.deleted} bài.`
+      );
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const runBulkMove = async () => {
+    if (!onBulkUpdateLessons || bulkSelected.length === 0 || (!bulkGrade && !bulkGroup)) return;
+    const parts = [bulkGrade ? `sang Lớp ${bulkGrade}` : '', bulkGroup ? `vào nhóm ${BULK_GROUP_LABEL[bulkGroup]}` : ''].filter(Boolean);
+    if (!window.confirm(`Chuyển ${bulkSelected.length} bài đã chọn ${parts.join(' và ')}?`)) return;
+    setBulkBusy(true);
+    try {
+      const r = await onBulkUpdateLessons(orderedBulkIds(), {
+        gradeLevel: bulkGrade ? Number(bulkGrade) : undefined,
+        group: bulkGroup || undefined,
+      });
+      setBulkSelected([]);
+      setBulkGrade('');
+      setBulkGroup('');
+      triggerSaveToast(
+        r.ok
+          ? `✅ Đã chuyển ${r.changed} bài ${parts.join(' và ')}.`
+          : `Đã chuyển ${r.changed} bài trên máy này nhưng CHƯA lưu được lên máy chủ. Thầy cô kiểm tra mạng rồi thử lại nhé.`
+      );
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   // Một DÒNG bài học (gọn, đọc lướt nhanh); bấm tên bài để xem trước nội dung
   const renderLessonRow = (l: Lesson) => {
     if (!l || !l.id) return null;
@@ -1382,9 +1467,30 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
 
     return (
       <li key={`row-${l.id}`} data-lesson-row={l.id} className="border-b border-slate-100 last:border-b-0">
-        <div className="grid grid-cols-[auto_1fr_auto] xl:grid-cols-[64px_1fr_96px_80px_150px_auto] items-center gap-x-3 gap-y-1 px-3 py-2 hover:bg-slate-50">
-          <span className="text-xs font-black px-2 py-1 rounded-lg bg-sky-100 text-sky-800 text-center">
-            Lớp {l.gradeLevel || '–'}
+        <div
+          className={`grid grid-cols-[auto_1fr_auto] ${bulkEnabled ? 'xl:grid-cols-[100px_1fr_96px_80px_150px_auto]' : 'xl:grid-cols-[64px_1fr_96px_80px_150px_auto]'} items-center gap-x-3 gap-y-1 px-3 py-2 hover:bg-slate-50 ${
+            bulkSelected.includes(l.id) ? 'bg-amber-50' : ''
+          }`}
+        >
+          <span className="flex items-center gap-1.5">
+            {bulkEnabled &&
+              (canModify ? (
+                <label className="w-8 h-8 -m-1 flex items-center justify-center cursor-pointer" title="Tích để chọn bài này">
+                  <input
+                    type="checkbox"
+                    checked={bulkSelected.includes(l.id)}
+                    onChange={() => toggleBulk(l.id)}
+                    data-bulk-check={l.id}
+                    aria-label={`Chọn bài ${l.title}`}
+                    className="w-5 h-5 accent-amber-500 cursor-pointer"
+                  />
+                </label>
+              ) : (
+                <span className="w-8 h-8 -m-1 shrink-0" aria-hidden="true" />
+              ))}
+            <span className="text-xs font-black px-2 py-1 rounded-lg bg-sky-100 text-sky-800 text-center whitespace-nowrap">
+              Lớp {l.gradeLevel || '–'}
+            </span>
           </span>
 
           <button
@@ -2012,9 +2118,100 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                   </div>
 
                   {/* Bảng: đầu cột (màn rộng) + các dòng; "Tất cả" + sắp xếp theo lớp thì chia nhóm */}
+                  {bulkEnabled && selectableInView.length > 0 && (
+                    <div
+                      className={`rounded-2xl border-2 px-3 py-2 flex flex-wrap items-center gap-2 ${
+                        bulkSelected.length > 0 ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-slate-50'
+                      }`}
+                      data-testid="bulk-bar"
+                    >
+                      <label className="flex items-center gap-2 text-sm font-bold text-slate-800 cursor-pointer min-h-[36px]">
+                        <input
+                          type="checkbox"
+                          checked={allInViewSelected}
+                          onChange={() =>
+                            setBulkSelected(
+                              allInViewSelected
+                                ? bulkSelected.filter((id) => !selectableInView.some((l) => l.id === id))
+                                : Array.from(new Set([...bulkSelected, ...selectableInView.map((l) => l.id)]))
+                            )
+                          }
+                          data-testid="bulk-select-all"
+                          className="w-5 h-5 accent-amber-500 cursor-pointer"
+                        />
+                        Chọn tất cả {selectableInView.length} bài đang lọc
+                      </label>
+                      {bulkSelected.length > 0 ? (
+                        <>
+                          <span className="px-2.5 py-1 rounded-full bg-amber-500 text-white text-sm font-black" data-testid="bulk-count">
+                            Đã chọn {bulkSelected.length} bài
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setBulkSelected([])}
+                            className="h-9 px-3 rounded-full text-sm font-bold text-slate-600 hover:bg-white cursor-pointer"
+                          >
+                            Bỏ chọn
+                          </button>
+                          <span className="flex items-center gap-1.5 flex-wrap ml-auto">
+                            <select
+                              value={bulkGrade}
+                              onChange={(e) => setBulkGrade(e.target.value as typeof bulkGrade)}
+                              aria-label="Chuyển sang lớp"
+                              data-testid="bulk-grade"
+                              className="h-9 px-3 rounded-full bg-white border border-slate-300 text-sm font-semibold cursor-pointer"
+                            >
+                              <option value="">Giữ lớp</option>
+                              <option value="3">Sang Lớp 3</option>
+                              <option value="4">Sang Lớp 4</option>
+                              <option value="5">Sang Lớp 5</option>
+                            </select>
+                            <select
+                              value={bulkGroup}
+                              onChange={(e) => setBulkGroup(e.target.value as typeof bulkGroup)}
+                              aria-label="Chuyển sang nhóm"
+                              data-testid="bulk-group"
+                              className="h-9 px-3 rounded-full bg-white border border-slate-300 text-sm font-semibold cursor-pointer"
+                            >
+                              <option value="">Giữ nhóm</option>
+                              <option value="exercise">Nhóm Luyện phím</option>
+                              <option value="poem">Nhóm Thơ SGK</option>
+                              <option value="prose">Nhóm Văn SGK</option>
+                            </select>
+                            <button
+                              type="button"
+                              disabled={bulkBusy || (!bulkGrade && !bulkGroup)}
+                              onClick={runBulkMove}
+                              data-testid="bulk-move"
+                              className="h-9 px-4 rounded-full bg-sky-600 hover:bg-sky-500 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-black cursor-pointer"
+                            >
+                              Chuyển {bulkSelected.length} bài
+                            </button>
+                            <button
+                              type="button"
+                              disabled={bulkBusy}
+                              onClick={runBulkDelete}
+                              data-testid="bulk-delete"
+                              className="h-9 px-4 rounded-full bg-rose-600 hover:bg-rose-500 disabled:bg-slate-300 text-white text-sm font-black flex items-center gap-1 cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" /> Xoá {bulkSelected.length} bài
+                            </button>
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-xs font-semibold text-slate-500">
+                          Tích ô vuông đầu mỗi dòng để xoá, chuyển lớp hoặc chuyển nhóm nhiều bài một lúc.
+                        </span>
+                      )}
+                      {bulkBusy && <span className="text-sm font-bold text-sky-700">Đang xử lý…</span>}
+                    </div>
+                  )}
+
                   <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-                    <div className="hidden xl:grid grid-cols-[64px_1fr_96px_80px_150px_auto] gap-x-3 px-3 py-2 bg-slate-100 text-xs font-black text-slate-600 uppercase tracking-wide">
-                      <span>Lớp</span>
+                    <div
+                      className={`hidden xl:grid ${bulkEnabled ? 'grid-cols-[100px_1fr_96px_80px_150px_auto]' : 'grid-cols-[64px_1fr_96px_80px_150px_auto]'} gap-x-3 px-3 py-2 bg-slate-100 text-xs font-black text-slate-600 uppercase tracking-wide`}
+                    >
+                      <span>{bulkEnabled ? 'Chọn · Lớp' : 'Lớp'}</span>
                       <span>Tên bài · nội dung</span>
                       <span>Loại</span>
                       <span>Tốc độ</span>

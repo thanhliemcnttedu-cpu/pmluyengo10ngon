@@ -110,6 +110,17 @@ const mergeLocalOnlyFields = (fromCloud: Lesson[], local: Lesson[]): Lesson[] =>
     for (const f of LOCAL_ONLY_LESSON_FIELDS) {
       if (merged[f] === undefined && old[f] !== undefined) (merged as any)[f] = old[f];
     }
+    // Nhóm bài (Luyện phím / Thơ / Văn) suy ra từ cột category trên máy chủ, không lấy cờ cũ của máy này:
+    // bài được chuyển nhóm ở máy khác thì máy này cũng thấy đúng nhóm mới.
+    if (l.category) {
+      const isPoem = l.category === 'poems_stories';
+      merged.isPoemOrStory = isPoem;
+      if (!isPoem) {
+        if (merged.genre === 'poem' || merged.genre === 'prose') merged.genre = 'exercise';
+      } else if (/^Văn/i.test(l.categoryTitleVi || '')) merged.genre = 'prose';
+      else if (/^Thơ/i.test(l.categoryTitleVi || '')) merged.genre = 'poem';
+      else if (merged.genre !== 'prose') merged.genre = 'poem';
+    }
     return merged;
   });
 };
@@ -470,7 +481,14 @@ export default function App() {
 
   // Modals state
   // Mặc định khi vào phần mềm sẽ hiển thị bảng thông báo nhắc nhở tắt Unikey
-  const [isUnikeyNoticeOpen, setIsUnikeyNoticeOpen] = useState<boolean>(true);
+  // Tải lại trang khi đang ở Cổng Giáo Viên: không bật lời nhắn Unikey đè lên Cổng (chỉ dành cho học sinh)
+  const [isUnikeyNoticeOpen, setIsUnikeyNoticeOpen] = useState<boolean>(() => {
+    try {
+      return !(sessionStorage.getItem(TEACHER_PORTAL_OPEN_KEY) === '1' && !!loadTeacherSession());
+    } catch {
+      return true;
+    }
+  });
   // Menu chọn khối lớp dạng nổi 3D ngay sau khi tắt hộp thoại lời nhắn
   const [isGradeSelectModalOpen, setIsGradeSelectModalOpen] = useState<boolean>(false);
 
@@ -966,6 +984,108 @@ export default function App() {
       handleRestart();
     }
     return true;
+  };
+
+  // ---- THAO TÁC HÀNG LOẠT trong Góc Giáo Viên ----
+  // Làm trên cả danh sách một lần (không gọi lần lượt từng bài) để các lần lưu không ghi đè lên nhau.
+  const persistLessonList = async (updatedList: Lesson[]) => {
+    setAllLessons(updatedList);
+    try {
+      localStorage.setItem('typing_kids_all_lessons', JSON.stringify(updatedList));
+    } catch {
+      // Ignore
+    }
+    try {
+      const res = await fetch('/api/lessons', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lessons: updatedList }),
+      });
+      return res.ok;
+    } catch (err) {
+      console.error('Lỗi khi lưu danh sách bài học trực tuyến:', err);
+      return false;
+    }
+  };
+
+  // Xoá nhiều bài: bài nào máy chủ từ chối (không phải của tài khoản này) thì giữ lại
+  const handleBulkDeleteLessons = async (ids: string[]): Promise<{ deleted: number; denied: number }> => {
+    const removed = new Set<string>();
+    let denied = 0;
+    for (const id of ids) {
+      let cloud: Awaited<ReturnType<typeof deleteLessonFromSupabase>> = 'error';
+      try {
+        cloud = await deleteLessonFromSupabase(id);
+      } catch (err) {
+        console.warn('Lỗi khi xóa bài học trên Supabase:', err);
+      }
+      if (cloud === 'denied') denied++;
+      else removed.add(id);
+    }
+    if (removed.size > 0) {
+      await persistLessonList(allLessons.filter((l) => !removed.has(l.id)));
+      if (customLesson && removed.has(customLesson.id)) {
+        setCustomLesson(null);
+        handleRestart();
+      }
+    }
+    return { deleted: removed.size, denied };
+  };
+
+  // Chuyển nhiều bài sang lớp khác và/hoặc nhóm khác (Luyện phím / Thơ SGK / Văn SGK)
+  const handleBulkUpdateLessons = async (
+    ids: string[],
+    change: { gradeLevel?: number; group?: 'exercise' | 'poem' | 'prose' }
+  ): Promise<{ changed: number; ok: boolean }> => {
+    let working = [...allLessons];
+    const changedIds = new Set<string>();
+    for (const id of ids) {
+      const idx = working.findIndex((l) => l.id === id);
+      if (idx < 0) continue;
+      const orig = working[idx];
+      const grade = change.gradeLevel ?? orig.gradeLevel ?? 3;
+      let next: Lesson = { ...orig, gradeLevel: grade };
+      // Đổi nhóm: đúng các trường mà màn Soạn bài vẫn ghi
+      const group = change.group ?? (orig.isPoemOrStory || orig.category === 'poems_stories' ? (orig.genre === 'prose' ? 'prose' : 'poem') : null);
+      if (change.group) {
+        const isPoem = change.group !== 'exercise';
+        next = {
+          ...next,
+          isPoemOrStory: isPoem,
+          genre: change.group,
+          category: isPoem ? 'poems_stories' : orig.category === 'poems_stories' ? 'short_sentences' : orig.category,
+        };
+      }
+      if (group === 'poem') next.categoryTitleVi = `Thơ SGK Lớp ${grade}`;
+      else if (group === 'prose') next.categoryTitleVi = `Văn SGK Lớp ${grade}`;
+      else if (/Lớp \d/.test(next.categoryTitleVi || '')) next.categoryTitleVi = next.categoryTitleVi.replace(/Lớp \d/, `Lớp ${grade}`);
+      if (/Khối \d/.test(next.subtitle || '')) next.subtitle = next.subtitle.replace(/Khối \d/, `Khối ${grade}`);
+      // Sang lớp khác: đứng cuối bộ bài cùng người tạo ở lớp mới (số hiển thị được đếm lại)
+      if (grade !== orig.gradeLevel && !isNumpadLesson(next)) {
+        const owner = lessonOwnerKey(orig);
+        const same = working.filter(
+          (l) => l.gradeLevel === grade && !isNumpadLesson(l) && l.id !== id && lessonOwnerKey(l) === owner
+        );
+        const maxKey = Math.max(0, same.length, ...lessonSortKeys(same).values());
+        next.title = `Bài ${maxKey + 1}: ${stripLessonNumber(orig.title)}`;
+      }
+      working[idx] = next;
+      changedIds.add(id);
+    }
+    if (changedIds.size === 0) return { changed: 0, ok: true };
+    const changed = working.filter((l) => changedIds.has(l.id));
+    let cloudOk = false;
+    try {
+      cloudOk = await bulkUpsertLessonsToSupabase(changed);
+    } catch (err) {
+      console.warn('Lỗi khi lưu bài chuyển lớp/nhóm lên Supabase:', err);
+    }
+    const serverOk = await persistLessonList(working);
+    if (customLesson && changedIds.has(customLesson.id)) {
+      setCustomLesson(applyLessonNumbers(working).find((l) => l.id === customLesson.id) ?? null);
+      handleRestart();
+    }
+    return { changed: changedIds.size, ok: cloudOk || serverOk };
   };
 
   // Nạp danh sách bài học và bài tập từ file USB (Offline)
@@ -2861,6 +2981,8 @@ export default function App() {
             allLessons={allAvailableLessons}
             teacherLessons={teacherLessons}
             onDeleteLesson={handleDeleteTeacherLesson}
+            onBulkDeleteLessons={handleBulkDeleteLessons}
+            onBulkUpdateLessons={handleBulkUpdateLessons}
             onResetSystemLesson={handleResetSystemLesson}
             onSelectLesson={(lesson) => setCustomLesson(lesson)}
             gradeAssignments={gradeAssignments}
