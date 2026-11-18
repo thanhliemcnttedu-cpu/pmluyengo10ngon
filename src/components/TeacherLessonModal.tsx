@@ -178,6 +178,12 @@ interface TeacherLessonModalProps {
   };
 }
 
+// Giữ Cổng Giáo Viên khi tải lại trang (sessionStorage: riêng từng thẻ trình duyệt)
+export const TEACHER_PORTAL_OPEN_KEY = 'typing_kids_teacher_portal_open_v1';
+const TEACHER_PORTAL_TAB_KEY = 'typing_kids_teacher_portal_tab_v1';
+const PORTAL_TABS = ['manage', 'editor', 'assign', 'backup', 'settings', 'accounts', 'password'] as const;
+type PortalTab = (typeof PORTAL_TABS)[number];
+
 export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   isOpen,
   onClose,
@@ -219,7 +225,22 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   // - 'editor': Soạn bài & phân tích ảnh SGK bằng AI
   // - 'assign': Giao 1 hoặc nhiều bài cho khối lớp
   // - 'backup': Sao lưu USB & đồng bộ Supabase
-  const [activeTab, setActiveTab] = useState<'manage' | 'editor' | 'assign' | 'backup' | 'settings' | 'accounts' | 'password'>('manage');
+  const [activeTab, setActiveTab] = useState<PortalTab>(() => {
+    try {
+      const t = sessionStorage.getItem(TEACHER_PORTAL_TAB_KEY) as PortalTab | null;
+      return t && PORTAL_TABS.includes(t) ? t : 'manage';
+    } catch {
+      return 'manage';
+    }
+  });
+  // Nhớ mục đang xem để tải lại trang vẫn ở đúng mục
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(TEACHER_PORTAL_TAB_KEY, activeTab);
+    } catch {
+      /* bỏ qua */
+    }
+  }, [activeTab]);
   // Dòng bài học đang mở phần xem trước
   const [previewLessonId, setPreviewLessonId] = useState<string | null>(null);
   // Máy chủ đã có sẵn khoá Gemini trong .env chưa (null = đang hỏi)

@@ -19,7 +19,8 @@ import { NumpadGuideModal } from './components/NumpadGuideModal';
 import { MultiGameHub } from './components/MultiGameHub';
 import { CurriculumModal } from './components/CurriculumModal';
 import { CustomTextModal } from './components/CustomTextModal';
-import { TeacherLessonModal } from './components/TeacherLessonModal';
+import { TeacherLessonModal, TEACHER_PORTAL_OPEN_KEY } from './components/TeacherLessonModal';
+import { loadTeacherSession } from './lib/adminAuth';
 import { TextbookImageViewer, TextbookTab } from './components/TextbookImageViewer';
 import { TextbookIllustrationCard } from './components/TextbookIllustrationCard';
 import { KeyboardSkinTheme, KEYBOARD_THEMES, DEFAULT_KEYBOARD_THEME, DEFAULT_KEYBOARD_THEME_ID } from './data/keyboardThemes';
@@ -483,7 +484,23 @@ export default function App() {
   const [isGameModalOpen, setIsGameModalOpen] = useState<boolean>(false);
   const [isCurriculumModalOpen, setIsCurriculumModalOpen] = useState<boolean>(false);
   const [isCustomTextModalOpen, setIsCustomTextModalOpen] = useState<boolean>(false);
-  const [isTeacherModalOpen, setIsTeacherModalOpen] = useState<boolean>(false);
+  // Tải lại trang (F5) khi đang ở Cổng Giáo Viên: mở lại Cổng nếu phiên đăng nhập vẫn còn.
+  // Dùng sessionStorage nên chỉ áp cho đúng thẻ trình duyệt đó, mở thẻ mới vẫn vào trang chủ.
+  const [isTeacherModalOpen, setIsTeacherModalOpen] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem(TEACHER_PORTAL_OPEN_KEY) === '1' && !!loadTeacherSession();
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      if (isTeacherModalOpen) sessionStorage.setItem(TEACHER_PORTAL_OPEN_KEY, '1');
+      else sessionStorage.removeItem(TEACHER_PORTAL_OPEN_KEY);
+    } catch {
+      /* trình duyệt chặn bộ nhớ: bỏ qua */
+    }
+  }, [isTeacherModalOpen]);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState<boolean>(false);
   // Vị trí đỉnh bảng cài đặt = ngay dưới nút bấm (thanh tiêu đề có thể 1 hoặc 2 hàng)
   const [settingsDropdownTop, setSettingsDropdownTop] = useState<number>(52);
