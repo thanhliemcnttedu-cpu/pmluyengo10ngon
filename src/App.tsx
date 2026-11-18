@@ -6,7 +6,7 @@ import { getKeyForChar, CODE_TO_KEY_MAP } from './data/keyboardLayout';
 import { buildKeystrokeSteps, KeystrokeStep, evaluateCaseMistake, isUpperCaseChar, isLowerCaseChar, isPunctuationChar } from './utils/vietnameseKeystrokes';
 import { getSymbolKeyGuideInfo, SymbolKeyGuideInfo } from './utils/symbolKeyGuide';
 import { capsGuidance, repeatPressInfo } from './utils/keyGuidance';
-import { MIN_SPEED_SEC, completedWords, score10, wordsPerMinute } from './utils/scoring';
+import { MIN_SPEED_SEC, completedWords, formatClock, score10, wordsPerMinute } from './utils/scoring';
 import { StartGate } from './components/StartGate';
 import { generateValidTelexSequencesForWord, checkKeyInSmartTelexWord, matchUnikeyInputInWord, isVietnameseAccented, VIETNAMESE_CHAR_DECOMPOSITION } from './utils/vietnameseSmartTelex';
 import { soundEngine } from './utils/audio';
@@ -374,6 +374,14 @@ export default function App() {
   const [clockNow, setClockNow] = useState<number>(() => Date.now());
   // Kết quả lần gõ xong gần nhất (để bảng kết quả báo kỷ lục mới)
   const [lastFinish, setLastFinish] = useState<{ elapsedSec: number; prevBestSec?: number; score: number } | null>(null);
+  // TẠM DỪNG: lưu mốc bấm dừng; tiếp tục thì dời mốc bắt đầu đi đúng khoảng đã dừng nên thời gian không bị cộng
+  const [pausedAt, setPausedAt] = useState<number | null>(null);
+  const pausedAtRef = useRef<number | null>(null);
+  pausedAtRef.current = pausedAt;
+  // Phím vừa dùng để tiếp tục không được tính là lần gõ (ô nhập ẩn có thể nhận lại phím đó ngay sau)
+  const resumedAtRef = useRef<number>(0);
+  // KẾT THÚC SỚM: bài chưa gõ hết, bảng kết quả chấm theo phần đã gõ
+  const [endedEarly, setEndedEarly] = useState<boolean>(false);
 
   const cancelCountdown = () => {
     countdownTimersRef.current.forEach(clearTimeout);
@@ -756,6 +764,8 @@ export default function App() {
     setEndTime(null);
     setLastFinish(null);
     setResultHidden(false);
+    setPausedAt(null);
+    setEndedEarly(false);
     // Phụ thuộc id + nội dung thay vì cả object: realtime tải lại danh sách sẽ tạo object mới
     // cho cùng một bài, nếu phụ thuộc cả object thì học sinh đang gõ dở bị xóa tiến độ.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1809,10 +1819,29 @@ export default function App() {
 
   // Đồng hồ: cập nhật mỗi 0,5 giây khi đang gõ, dừng khi xong bài
   useEffect(() => {
-    if (typingPhase !== 'running' || isCompleted) return;
+    if (typingPhase !== 'running' || isCompleted || pausedAt !== null) return;
     const id = setInterval(() => setClockNow(Date.now()), 500);
     return () => clearInterval(id);
-  }, [typingPhase, isCompleted]);
+  }, [typingPhase, isCompleted, pausedAt]);
+
+  const pauseTyping = useCallback(() => {
+    if (typingPhaseRef.current !== 'running' || isCompleted || pausedAtRef.current !== null) return;
+    const t = Date.now();
+    pausedAtRef.current = t;
+    setPausedAt(t);
+    setClockNow(t);
+  }, [isCompleted]);
+
+  const resumeTyping = useCallback(() => {
+    const p = pausedAtRef.current;
+    if (p === null) return;
+    const t = Date.now();
+    pausedAtRef.current = null;
+    resumedAtRef.current = t;
+    setStartTime((s) => (s === null ? s : s + (t - p)));
+    setClockNow(t);
+    setPausedAt(null);
+  }, []);
   useEffect(() => () => cancelCountdown(), []);
 
   // Luôn trỏ tới hàm xử lý của lần render mới nhất (dùng khi xử lý chuỗi nhiều ký tự)
@@ -1858,6 +1887,13 @@ export default function App() {
       // Đã thoát toàn màn hình mà gõ phím -> tự phóng to lại (trừ phím Esc dùng để thoát)
       if (!e.repeat && e.key !== 'Escape' && !document.fullscreenElement) {
         autoReenterFullscreen();
+      }
+
+      // Đang tạm dừng: bấm phím bất kì để tiếp tục, phím đó không tính là lần gõ
+      if (pausedAtRef.current !== null) {
+        e.preventDefault();
+        if (!e.repeat) resumeTyping();
+        return;
       }
 
       // Giữ phím lâu sinh nhiều sự kiện lặp -> không tính thành nhiều lỗi
@@ -1943,6 +1979,7 @@ export default function App() {
     handleInputEvent,
     autoReenterFullscreen,
     startTyping,
+    resumeTyping,
     isCompleted,
     isUnikeyNoticeOpen,
     isAuthorDonateModalOpen,
@@ -1964,7 +2001,12 @@ export default function App() {
     (inputVal: string, code?: string) => {
       if (!inputVal) return;
       if (typingPhaseRef.current !== 'running') return; // chưa bấm BẮT ĐẦU GÕ
+      if (pausedAtRef.current !== null) {
+        resumeTyping();
+        return;
+      }
       const now = Date.now();
+      if (now - resumedAtRef.current < 200) return; // phím vừa dùng để tiếp tục
       // Bỏ qua nếu là phím đơn và vừa được xử lý bởi keydown vật lý trong vòng 150ms
       if (
         inputVal.length === 1 &&
@@ -1977,11 +2019,13 @@ export default function App() {
       }
       handleInputEvent(inputVal, code);
     },
-    [handleInputEvent]
+    [handleInputEvent, resumeTyping]
   );
 
   const handleRestart = () => {
     cancelCountdown();
+    setPausedAt(null);
+    setEndedEarly(false);
     setTypingPhase('ready');
     setEndTime(null);
     setLastFinish(null);
@@ -2013,9 +2057,10 @@ export default function App() {
 
   // ---- Số liệu cho BẢNG ĐIỂM (đồng hồ, điểm thang 10, từ đúng, chính xác, tốc độ từ/phút) ----
   const elapsedSec = startTime
-    ? Math.max(0, Math.floor(((isCompleted && endTime ? endTime : clockNow) - startTime) / 1000))
+    ? Math.max(0, Math.floor(((isCompleted && endTime ? endTime : pausedAt ?? clockNow) - startTime) / 1000))
     : 0;
-  const cursorCharIndex = isCompleted ? targetText.length : currentStep ? currentStep.charIndex : targetText.length;
+  const cursorCharIndex =
+    isCompleted && !endedEarly ? targetText.length : currentStep ? currentStep.charIndex : targetText.length;
   const wordProgress = useMemo(() => completedWords(targetText, cursorCharIndex), [targetText, cursorCharIndex]);
   const liveWordsPerMin = wordsPerMinute(wordProgress.done, elapsedSec);
   // 10 giây đầu chưa đo được tốc độ: điểm tạm tính theo độ chính xác (quy về thang 10)
@@ -2025,6 +2070,28 @@ export default function App() {
       : elapsedSec < MIN_SPEED_SEC
       ? Math.round(stats.accuracy) / 10
       : score10(stats.accuracy, liveWordsPerMin, activeLesson.targetWpm);
+
+  // Kết thúc bài sớm: dừng đồng hồ, chấm điểm theo số từ đã gõ đúng, không ghi kỷ lục (bài chưa xong)
+  const handleFinishEarly = () => {
+    if (typingPhaseRef.current !== 'running' || isCompleted || startTime === null) return;
+    const now = pausedAtRef.current ?? Date.now();
+    const finishSec = Math.max(1, Math.floor((now - startTime) / 1000));
+    const done = wordProgress.done;
+    // Điểm phần đã gõ nhân tỉ lệ số từ hoàn thành: gõ 1 từ rồi dừng không được điểm như gõ cả bài
+    const ratio = wordProgress.total > 0 ? done / wordProgress.total : 0;
+    const finishScore =
+      stats.totalCharacters === 0
+        ? 0
+        : Math.round(score10(stats.accuracy, Math.round((done * 60) / finishSec), activeLesson.targetWpm) * ratio * 10) / 10;
+    pausedAtRef.current = null;
+    setPausedAt(null);
+    setEndedEarly(true);
+    setEndTime(now);
+    setLastFinish({ elapsedSec: finishSec, score: finishScore });
+    setIsCompleted(true);
+  };
+  const isPaused = pausedAt !== null && !isCompleted;
+  const canControlTyping = typingPhase === 'running' && !isCompleted;
 
   // Vị trí của bài đang hiển thị (kể cả bài chọn từ mục lục / bài cô giao) trong danh sách của lớp
   const activeLessonPos = gradeFilteredLessons.findIndex((l) => l.id === activeLesson.id);
@@ -2051,6 +2118,10 @@ export default function App() {
       return;
     }
     if (typingPhaseRef.current !== 'running') return; // chưa bấm BẮT ĐẦU GÕ
+    if (pausedAtRef.current !== null) {
+      resumeTyping();
+      return;
+    }
 
     if (hasMistake) {
       if (key.code === 'Backspace') {
@@ -2483,6 +2554,43 @@ export default function App() {
                 onOpenAuthor={() => setIsAuthorDonateModalOpen(true)}
               />
             )}
+            {/* Màn TẠM DỪNG: đồng hồ đứng yên; gõ phím bất kì hoặc bấm Tiếp tục để gõ tiếp */}
+            {isPaused && (
+              <div
+                className="absolute inset-0 z-[45] flex items-center justify-center bg-slate-900/45 backdrop-blur-[2px] rounded-2xl p-3"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Đang tạm dừng"
+                data-testid="pause-overlay"
+              >
+                <div className="w-full max-w-md rounded-3xl border-2 border-sky-200 bg-white p-5 sm:p-6 text-center shadow-2xl">
+                  <div className="text-4xl" aria-hidden="true">⏸</div>
+                  <h2 className="mt-1 text-2xl font-black text-slate-900">Đang tạm dừng</h2>
+                  <p className="mt-1 text-base font-bold text-slate-600">
+                    Đồng hồ đã dừng ở <span className="tabular-nums text-sky-700">{formatClock(elapsedSec)}</span>.
+                    <br />
+                    Gõ phím bất kì hoặc bấm <b>Tiếp tục</b> để gõ tiếp.
+                  </p>
+                  <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={resumeTyping}
+                      autoFocus
+                      className="min-h-[48px] px-6 rounded-full bg-gradient-to-r from-sky-500 to-blue-600 text-white text-lg font-black shadow-md hover:brightness-110 active:scale-95 cursor-pointer"
+                    >
+                      ▶ Tiếp tục
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleFinishEarly}
+                      className="min-h-[48px] px-5 rounded-full border-2 border-rose-300 bg-rose-50 text-rose-800 text-base font-black hover:bg-rose-100 active:scale-95 cursor-pointer"
+                    >
+                      🏁 Kết thúc bài, xem điểm
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             {/* 1. Khu vực luyện gõ & ô nhập văn bản (PracticeArea) */}
             <section aria-label="Khu vực luyện gõ và ô nhập văn bản" className="shrink-0">
               <PracticeArea
@@ -2498,8 +2606,10 @@ export default function App() {
                 stats={stats}
                 scoreBoard={{
                   elapsedSec,
-                  running: typingPhase === 'running' && !isCompleted,
-                  score: liveScore,
+                  running: canControlTyping && !isPaused,
+                  paused: isPaused,
+                  // Kết thúc sớm: bảng điểm hiện đúng điểm đã chấm (nhân tỉ lệ phần đã gõ)
+                  score: endedEarly && lastFinish ? lastFinish.score : liveScore,
                   doneWords: wordProgress.done,
                   totalWords: wordProgress.total,
                   accuracy: stats.accuracy,
@@ -2509,6 +2619,11 @@ export default function App() {
                 isCompleted={isCompleted}
                 hasMistake={hasMistake}
                 mistakeChar={mistakeChar}
+                typingControl={
+                  canControlTyping
+                    ? { paused: isPaused, onPause: pauseTyping, onResume: resumeTyping, onFinish: handleFinishEarly }
+                    : undefined
+                }
                 onRestart={handleRestart}
                 onNextLesson={handleNextLesson}
                 onPrevLesson={handlePrevLesson}
@@ -2928,8 +3043,12 @@ export default function App() {
         result={{
           elapsedSec: lastFinish?.elapsedSec ?? elapsedSec,
           score: lastFinish?.score ?? liveScore,
-          wordsPerMin: Math.round((wordProgress.total * 60) / Math.max(1, lastFinish?.elapsedSec ?? elapsedSec)),
+          wordsPerMin: Math.round(
+            ((endedEarly ? wordProgress.done : wordProgress.total) * 60) / Math.max(1, lastFinish?.elapsedSec ?? elapsedSec)
+          ),
           totalWords: wordProgress.total,
+          doneWords: endedEarly ? wordProgress.done : wordProgress.total,
+          endedEarly,
           prevBestSec: lastFinish?.prevBestSec,
           bestScore: completedLessons[activeLesson.id]?.bestScore,
         }}

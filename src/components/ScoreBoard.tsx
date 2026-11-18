@@ -8,6 +8,7 @@ import { MIN_SPEED_SEC, formatClock, formatScore } from '../utils/scoring';
 interface ScoreBoardProps {
   elapsedSec: number;
   running: boolean; // đồng hồ đang chạy (nhấp nháy dấu hai chấm)
+  paused?: boolean; // học sinh bấm Tạm dừng
   score: number;
   doneWords: number;
   totalWords: number;
@@ -20,6 +21,7 @@ interface ScoreBoardProps {
 export const ScoreBoard: React.FC<ScoreBoardProps> = ({
   elapsedSec,
   running,
+  paused = false,
   score,
   doneWords,
   totalWords,
@@ -34,7 +36,7 @@ export const ScoreBoard: React.FC<ScoreBoardProps> = ({
       icon: '⏱',
       label: 'Thời gian',
       value: formatClock(elapsedSec),
-      sub: running ? 'Đang tính giờ' : elapsedSec > 0 ? 'Đã dừng' : 'Chưa bắt đầu',
+      sub: paused ? '⏸ Đang tạm dừng' : running ? 'Đang tính giờ' : elapsedSec > 0 ? 'Đã dừng' : 'Chưa bắt đầu',
       tone: 'from-sky-50 to-white border-sky-300 text-sky-900',
     },
     {

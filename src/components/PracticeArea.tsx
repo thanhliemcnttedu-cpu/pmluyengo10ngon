@@ -43,6 +43,8 @@ interface PracticeAreaProps {
   hasMistake: boolean;
   mistakeChar: string | null;
   onRestart: () => void;
+  /** Có khi đang gõ: nút Tạm dừng / Tiếp tục và Kết thúc bài sớm */
+  typingControl?: { paused: boolean; onPause: () => void; onResume: () => void; onFinish: () => void };
   onNextLesson: () => void;
   onPrevLesson: () => void;
   hasPrevLesson: boolean;
@@ -124,6 +126,7 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
   hasMistake,
   mistakeChar,
   onRestart,
+  typingControl,
   onNextLesson,
   onPrevLesson,
   hasPrevLesson,
@@ -600,6 +603,35 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-300 animate-ping" />
               )}
             </button>
+          )}
+
+          {typingControl && (
+            <>
+              <button
+                type="button"
+                onClick={typingControl.paused ? typingControl.onResume : typingControl.onPause}
+                className={`min-h-[36px] px-3 rounded-xl font-black text-[15px] flex items-center gap-1 shadow-sm transition-all cursor-pointer active:scale-95 border-2 ${
+                  typingControl.paused
+                    ? 'bg-sky-600 border-sky-600 text-white hover:bg-sky-500'
+                    : 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100'
+                }`}
+                title={typingControl.paused ? 'Gõ tiếp, đồng hồ chạy lại' : 'Tạm dừng, đồng hồ ngừng đếm'}
+                data-testid="pause-toggle"
+              >
+                <span aria-hidden="true">{typingControl.paused ? '▶' : '⏸'}</span>
+                <span>{typingControl.paused ? 'Tiếp tục' : 'Tạm dừng'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={typingControl.onFinish}
+                className="min-h-[36px] px-3 rounded-xl font-black text-[15px] flex items-center gap-1 shadow-sm transition-all cursor-pointer active:scale-95 border-2 bg-rose-50 border-rose-300 text-rose-800 hover:bg-rose-100"
+                title="Kết thúc bài ngay, xem điểm phần đã gõ"
+                data-testid="finish-early"
+              >
+                <span aria-hidden="true">🏁</span>
+                <span>Kết thúc</span>
+              </button>
+            </>
           )}
 
           {/* Cụm điều khiển mini */}

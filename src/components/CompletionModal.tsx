@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { describeDuration, formatClock, formatScore } from '../utils/scoring';
 import { Lesson, TypingStats } from '../types/typing';
 import { soundEngine } from '../utils/audio';
@@ -29,6 +29,10 @@ interface CompletionModalProps {
     score: number;
     wordsPerMin: number;
     totalWords: number;
+    /** Số từ đã gõ đúng (khi kết thúc sớm nhỏ hơn totalWords) */
+    doneWords?: number;
+    /** Học sinh bấm Kết thúc khi chưa gõ hết bài */
+    endedEarly?: boolean;
     prevBestSec?: number;
     bestScore?: number;
   };
@@ -49,9 +53,44 @@ export const CompletionModal: React.FC<CompletionModalProps> = ({
   hasNextLesson,
   onOpenCurriculumModal,
 }) => {
-  // Fire multi-stage confetti and play applause + fanfare audio on open
-  useEffect(() => {
+  // PHÓNG TO VỪA MÀN HÌNH: đo bảng ở cỡ gốc rồi phóng (hoặc thu) cho vừa khung nhìn, giữ nguyên tỉ lệ
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [fitScale, setFitScale] = useState(1);
+  // Màn hình nằm ngang: bảng rộng hơn (chữ ít xuống dòng, bảng thấp lại) để phóng to được nhiều hơn
+  const [panelWidth, setPanelWidth] = useState(576);
+  useLayoutEffect(() => {
     if (!isOpen) return;
+    const el = panelRef.current;
+    if (!el) return;
+    const fit = () => {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const want = vw / vh > 1.25 ? 880 : Math.min(576, vw - 16);
+      if (Math.abs(el.offsetWidth - want) > 1) {
+        setPanelWidth(want); // ResizeObserver sẽ gọi lại fit sau khi đổi bề rộng
+        return;
+      }
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      if (!w || !h) return;
+      const pad = window.innerWidth < 640 ? 16 : 40; // chừa lề quanh bảng
+      const s = Math.min((window.innerWidth - pad) / w, (window.innerHeight - pad) / h, 2.2);
+      setFitScale(Math.max(0.4, Math.round(s * 1000) / 1000));
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    window.addEventListener('resize', fit);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', fit);
+    };
+  }, [isOpen]);
+
+  // Fire multi-stage confetti and play applause + fanfare audio on open
+  const endedEarly = !!result?.endedEarly;
+  useEffect(() => {
+    if (!isOpen || endedEarly) return; // kết thúc sớm: không pháo hoa, không kèn chiến thắng
 
     // 1. Play crowd applause & victory fanfare
     soundEngine.playApplause();
@@ -85,7 +124,7 @@ export const CompletionModal: React.FC<CompletionModalProps> = ({
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, [isOpen]);
+  }, [isOpen, endedEarly]);
 
   if (!isOpen) return null;
 
@@ -93,7 +132,9 @@ export const CompletionModal: React.FC<CompletionModalProps> = ({
   const elapsedSec = result?.elapsedSec ?? stats.timeSpentSeconds;
   const score = result?.score ?? 0;
   const wordsPerMin = result?.wordsPerMin ?? 0;
-  const isNewRecord = result?.prevBestSec !== undefined && elapsedSec < result.prevBestSec;
+  const isNewRecord = !endedEarly && result?.prevBestSec !== undefined && elapsedSec < result.prevBestSec;
+  const doneWords = result?.doneWords ?? result?.totalWords ?? 0;
+  const totalWords = result?.totalWords ?? 0;
   const bestSec = result?.prevBestSec !== undefined ? Math.min(result.prevBestSec, elapsedSec) : elapsedSec;
 
   // Đánh giá kỹ năng gõ theo điểm thang 10
@@ -101,7 +142,12 @@ export const CompletionModal: React.FC<CompletionModalProps> = ({
   let skillBadgeClass = 'bg-sky-500 text-white';
   let congratulationMessage = 'Bé đã rất cố gắng! Hãy tiếp tục luyện tập để gõ phím nhanh và chính xác hơn nhé!';
 
-  if (score >= 9) {
+  if (endedEarly) {
+    congratulationMessage =
+      doneWords === 0
+        ? 'Em chưa gõ được từ nào. Bấm "Luyện Lại Bài Này" để thử lại nhé!'
+        : 'Em đã cố gắng rồi! Lần sau hãy thử gõ hết cả bài để được điểm cao hơn nhé!';
+  } else if (score >= 9) {
     skillRating = 'Xuất Sắc ⭐⭐⭐';
     skillBadgeClass = 'bg-gradient-to-r from-amber-500 to-emerald-500 text-slate-950';
     congratulationMessage = 'Tuyệt vời! Bé gõ phím chuẩn 10 ngón siêu nhanh và cực kỳ chính xác như nghệ sĩ đánh đàn!';
@@ -113,11 +159,16 @@ export const CompletionModal: React.FC<CompletionModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-md flex items-center justify-center overflow-hidden animate-in fade-in duration-200"
       onClick={onClose}
     >
+      {/* Lớp ngoài chỉ để phóng to; lớp trong giữ hiệu ứng xuất hiện */}
+      <div style={{ transform: `scale(${fitScale})`, transformOrigin: 'center center' }} className="shrink-0">
       <div
-        className="relative w-full max-w-xl bg-gradient-to-b from-white via-amber-50/40 to-sky-50/50 rounded-3xl border-4 border-amber-400 shadow-2xl p-5 sm:p-7 flex flex-col items-center max-h-[92vh] overflow-y-auto animate-in zoom-in-95 duration-200 select-none"
+        ref={panelRef}
+        data-testid="completion-panel"
+        style={{ width: panelWidth }}
+        className="relative bg-gradient-to-b from-white via-amber-50/40 to-sky-50/50 rounded-3xl border-4 border-amber-400 shadow-2xl p-5 sm:p-7 flex flex-col items-center animate-in zoom-in-95 duration-200 select-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Nút đóng */}
@@ -142,7 +193,7 @@ export const CompletionModal: React.FC<CompletionModalProps> = ({
 
         {/* Tiêu đề & Lời chúc */}
         <h2 className="text-xl sm:text-2xl font-black text-slate-900 text-center tracking-tight">
-          CHÚC MỪNG BÉ HOÀN THÀNH BÀI GÕ!
+          {endedEarly ? 'EM ĐÃ KẾT THÚC BÀI SỚM' : 'CHÚC MỪNG BÉ HOÀN THÀNH BÀI GÕ!'}
         </h2>
         <p className="text-xs sm:text-sm font-bold text-slate-600 text-center mt-0.5">
           Bài học: <span className="text-indigo-700 font-black">"{lesson.title}"</span>
@@ -173,10 +224,21 @@ export const CompletionModal: React.FC<CompletionModalProps> = ({
         {/* Thời gian hoàn thành bài: học sinh biết mình gõ xong trong bao lâu */}
         <div className="w-full mt-3 rounded-2xl border-2 border-sky-300 bg-sky-50 px-4 py-3 text-center">
           <p className="text-base sm:text-lg font-black text-sky-900">
-            ⏱ Em đã gõ xong bài trong <span className="text-sky-700">{describeDuration(elapsedSec)}</span>
+            {endedEarly ? (
+              <>
+                ⏱ Em đã gõ được <span className="text-sky-700">{doneWords}/{totalWords} từ</span> trong{' '}
+                <span className="text-sky-700">{describeDuration(elapsedSec)}</span>
+              </>
+            ) : (
+              <>
+                ⏱ Em đã gõ xong bài trong <span className="text-sky-700">{describeDuration(elapsedSec)}</span>
+              </>
+            )}
           </p>
           <p className="text-sm font-bold text-slate-600 mt-0.5">
-            {isNewRecord ? (
+            {endedEarly ? (
+              <>Bài chưa gõ xong nên chưa tính kỷ lục. Điểm chấm theo phần đã gõ.</>
+            ) : isNewRecord ? (
               <span className="text-emerald-700">🎉 Kỷ lục mới! Nhanh hơn lần trước {describeDuration((result?.prevBestSec ?? 0) - elapsedSec)}</span>
             ) : (
               <>Kỷ lục của em ở bài này: {formatClock(bestSec)}</>
@@ -286,6 +348,7 @@ export const CompletionModal: React.FC<CompletionModalProps> = ({
             </button>
           )}
         </div>
+      </div>
       </div>
     </div>
   );
