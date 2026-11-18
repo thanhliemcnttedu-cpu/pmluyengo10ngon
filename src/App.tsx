@@ -32,6 +32,7 @@ import { AuthorDonateModal } from './components/AuthorDonateModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useSmartAutoFitViewport } from './utils/smartViewportEngine';
 import { SmartViewportModal } from './components/SmartViewportModal';
+import { TEACHER_CODE_KEY } from './components/CurriculumModal';
 import {
   sortLessonsLogically,
   applyLessonNumbers,
@@ -40,6 +41,8 @@ import {
   isNumpadLesson,
   displayedLessonNumber,
   lessonSortKeys,
+  lessonOwnerKey,
+  isSystemLesson,
 } from './utils/lessonNumbering';
 import {
   fetchLessonsFromSupabase,
@@ -297,12 +300,27 @@ export default function App() {
   });
 
   // Lọc và sắp xếp tự động các bài học của khối lớp theo đúng tiến trình chuẩn (Bài 1, Bài 2, Bài 3, Bài 4...)
+  // HỌC SINH: mặc định chỉ thấy bài hệ thống (quản trị). Bài của giáo viên phụ chỉ hiện khi gõ mã cô giáo
+  // ở bảng Chọn bài (mã nhớ trên máy). Bài cô đã được giao cho khối lớp vẫn mở qua nút "Bài cô giáo giao".
+  const [studentTeacherCode, setStudentTeacherCode] = useState<string>(() => {
+    try {
+      return localStorage.getItem(TEACHER_CODE_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
+  const studentVisibleLessons = useMemo(
+    () => allAvailableLessons.filter((l) => isSystemLesson(l) || (!!studentTeacherCode && lessonOwnerKey(l) === studentTeacherCode)),
+    [allAvailableLessons, studentTeacherCode]
+  );
+
   const gradeFilteredLessons = useMemo(() => {
-    const list = allAvailableLessons.filter(
-      (l) => l.gradeLevel === selectedGrade || !l.gradeLevel
-    );
+    const inGrade = studentVisibleLessons.filter((l) => l.gradeLevel === selectedGrade || !l.gradeLevel);
+    // Đang theo mã cô giáo và cô có bài ở lớp này: dải bài / bài trước-sau chỉ đi trong bộ bài của cô
+    const ofTeacher = studentTeacherCode ? inGrade.filter((l) => lessonOwnerKey(l) === studentTeacherCode) : [];
+    const list = ofTeacher.length > 0 ? ofTeacher : inGrade.filter((l) => isSystemLesson(l));
     return sortLessonsLogically(list);
-  }, [allAvailableLessons, selectedGrade]);
+  }, [studentVisibleLessons, studentTeacherCode, selectedGrade]);
 
   // Curriculum & Current Lesson state - Mặc định bài 3 Mèo Con Đi Học cho Lớp 3
   const [currentLessonIndex, setCurrentLessonIndex] = useState<number>(() => {
@@ -813,8 +831,10 @@ export default function App() {
         const n = storedLessonNumber(raw.title);
         storedTitle = n !== null ? `Bài ${n}: ${name}` : name;
       } else {
+        // Cùng bộ bài (hệ thống hoặc cùng mã giáo viên) và cùng khối lớp
+        const owner = lessonOwnerKey(raw ?? incoming);
         const same = allLessons.filter(
-          (l) => l.gradeLevel === incoming.gradeLevel && !isNumpadLesson(l) && l.id !== incoming.id
+          (l) => l.gradeLevel === incoming.gradeLevel && !isNumpadLesson(l) && l.id !== incoming.id && lessonOwnerKey(l) === owner
         );
         // Lớn hơn mọi khoá sắp xếp trong khối (kể cả khoá ảo của bài cũ không ghi số) -> đứng cuối
         const maxKey = Math.max(0, same.length, ...lessonSortKeys(same).values());
@@ -2619,7 +2639,7 @@ export default function App() {
         isAssignedHomework={isCurrentAssignedHomework}
         activeTab={textbookTab}
         onTabChange={setTextbookTab}
-        allLessons={allAvailableLessons}
+        allLessons={studentVisibleLessons}
         onSelectLesson={(l) => {
           setCustomLesson(l);
           handleRestart();
@@ -2827,6 +2847,8 @@ export default function App() {
         teacherLessons={teacherLessons}
         onOpenTeacherModal={() => setIsTeacherModalOpen(true)}
         initialGradeFilter={selectedGrade}
+        teacherCode={studentTeacherCode}
+        onTeacherCodeChange={setStudentTeacherCode}
       />
 
       {/* Custom Text Practice Modal */}

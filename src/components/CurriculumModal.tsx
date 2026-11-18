@@ -3,7 +3,8 @@ import { Lesson } from '../types/typing';
 import { LESSONS } from '../data/lessons';
 import { X, CheckCircle2, Star, Sparkles, BookOpen, UserCheck, Image as ImageIcon, GraduationCap, Feather, Search } from 'lucide-react';
 
-const TEACHER_CODE_KEY = 'typing_kids_teacher_code_filter_v1';
+export const TEACHER_CODE_KEY = 'typing_kids_teacher_code_filter_v1';
+import { isSystemLesson, lessonOwnerKey } from '../utils/lessonNumbering';
 
 /** Chuẩn hoá mã cô giáo học sinh gõ: "gv1", "GV001", "1", "001" -> "GV001"; "admin" -> "ADMIN" */
 export function normalizeTeacherCode(raw: string): string {
@@ -16,8 +17,7 @@ export function normalizeTeacherCode(raw: string): string {
 }
 
 /** Bài có thuộc mã cô giáo này không (bài cũ chưa ghi người tạo được tính là của quản trị) */
-const lessonOfCode = (l: Lesson, code: string) =>
-  code === 'ADMIN' ? !l.ownerCode || l.ownerCode === 'ADMIN' : (l.ownerCode || '').toUpperCase() === code;
+const lessonOfCode = (l: Lesson, code: string) => lessonOwnerKey(l) === code;
 
 interface CurriculumModalProps {
   isOpen: boolean;
@@ -29,6 +29,9 @@ interface CurriculumModalProps {
   teacherLessons?: Lesson[];
   onOpenTeacherModal?: () => void;
   initialGradeFilter?: number;
+  /** Mã cô giáo học sinh đang theo (do App giữ để dải bài ngoài màn hình cũng theo mã) */
+  teacherCode?: string;
+  onTeacherCodeChange?: (code: string) => void;
 }
 
 /**
@@ -64,19 +67,26 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
   teacherLessons = [],
   onOpenTeacherModal,
   initialGradeFilter,
+  teacherCode: teacherCodeProp,
+  onTeacherCodeChange,
 }) => {
   // Lọc thêm theo lớp cho các mục gộp nhiều lớp (Tất cả, Thơ & Văn SGK, Numpad, Bài cô giáo)
   const [subGrade, setSubGrade] = useState<'all' | 3 | 4 | 5>('all');
   // Tìm bài theo mã cô giáo: học sinh gõ mã (vd GV001) rồi Enter -> chỉ còn bài của cô đó.
   // Nhớ mã trên máy này để lần sau mở ra là thấy ngay bài của cô.
   const [codeInput, setCodeInput] = useState('');
-  const [teacherCode, setTeacherCode] = useState<string>(() => {
+  const [teacherCodeLocal, setTeacherCodeLocal] = useState<string>(() => {
     try {
       return localStorage.getItem(TEACHER_CODE_KEY) || '';
     } catch {
       return '';
     }
   });
+  const teacherCode = teacherCodeProp ?? teacherCodeLocal;
+  const setTeacherCode = (c: string) => {
+    setTeacherCodeLocal(c);
+    onTeacherCodeChange?.(c);
+  };
   const [codeError, setCodeError] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | '3' | '4' | '5' | 'poems' | 'numpad' | 'teacher'>(
     initialGradeFilter ? String(initialGradeFilter) as any : 'all'
@@ -102,7 +112,10 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
   if (!isOpen) return null;
 
   const allEffective = allLessons && allLessons.length > 0 ? allLessons : [...teacherLessons, ...LESSONS];
-  const effectiveLessons = teacherCode ? allEffective.filter((l) => l && lessonOfCode(l, teacherCode)) : allEffective;
+  // Chưa gõ mã: chỉ bài hệ thống. Gõ mã: chỉ bộ bài của cô giáo đó.
+  const effectiveLessons = teacherCode
+    ? allEffective.filter((l) => l && lessonOfCode(l, teacherCode))
+    : allEffective.filter((l) => l && isSystemLesson(l));
   // Tên cô giáo của mã đang lọc (lấy từ tên người soạn bài)
   const codeTeacherName = teacherCode
     ? effectiveLessons.find((l) => l.authorTeacher)?.authorTeacher || (teacherCode === 'ADMIN' ? 'Quản trị' : '')
@@ -329,20 +342,7 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
             <span>🖩 Phím Số Numpad</span>
           </button>
 
-          {teacherLessons.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setFilterTab('teacher')}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1 ${
-                filterTab === 'teacher'
-                  ? 'bg-amber-500 text-slate-950 shadow ring-2 ring-amber-300'
-                  : 'bg-amber-100 text-amber-900 hover:bg-amber-200 border border-amber-300'
-              }`}
-            >
-              <UserCheck className="w-3.5 h-3.5" />
-              <span>Bài Cô Giáo ({teacherLessons.length})</span>
-            </button>
-          )}
+          {/* Bài của giáo viên phụ không còn hiện chung: học sinh gõ mã cô giáo ở ô phía trên */}
 
           {onOpenTeacherModal && (
             <button

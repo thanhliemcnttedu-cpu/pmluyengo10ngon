@@ -1,5 +1,7 @@
 // ============================================================================
-// TỰ ĐÁNH SỐ BÀI THEO TỪNG KHỐI LỚP
+// TỰ ĐÁNH SỐ BÀI THEO TỪNG BỘ BÀI VÀ KHỐI LỚP
+// Mỗi bộ bài đánh số riêng: bài hệ thống (quản trị) Lớp 3 là Bài 1…N; bài của GV001 ở Lớp 3 cũng từ Bài 1…M.
+// Học sinh chỉ thấy bài hệ thống, gõ mã cô giáo mới thấy bài của cô -> mỗi bộ luôn liền số, không nhảy cóc.
 // Số "Bài N" do hệ thống tự đếm theo thứ tự trong khối lớp, không phụ thuộc số người soạn gõ tay:
 //  - Thêm bài mới: bài mới đứng cuối khối, nhận số = số bài hiện có + 1.
 //  - Xoá bài: các bài phía sau tự lùi số (đếm lại khi hiển thị).
@@ -12,6 +14,27 @@ import type { Lesson } from '../types/typing';
 const LEADING_NUMBER_RE = /^\s*bài\s+\d+\s*[a-z]?\s*[:：.\-–—]\s*/i;
 /** Số bài ghi trong tên (dùng để giữ đúng thứ tự cũ khi sắp xếp) */
 const ANY_NUMBER_RE = /(?:Bài|bài)\s*(\d+)/i;
+
+/** Bộ bài của một bài: 'ADMIN' (bài hệ thống, kể cả bài cũ chưa ghi người tạo) hoặc mã giáo viên 'GV001'… */
+export const lessonOwnerKey = (l: Lesson): string => {
+  const c = (l?.ownerCode || '').toUpperCase();
+  return c && c !== 'ADMIN' ? c : 'ADMIN';
+};
+export const isSystemLesson = (l: Lesson): boolean => lessonOwnerKey(l) === 'ADMIN';
+
+/** Danh sách giáo viên có bài trên hệ thống: mã, tên (lấy từ tên người soạn), số bài */
+export function teacherDirectory(lessons: Lesson[]): { code: string; name: string; count: number }[] {
+  const map = new Map<string, { code: string; name: string; count: number }>();
+  for (const l of lessons) {
+    if (!l || isSystemLesson(l)) continue;
+    const code = lessonOwnerKey(l);
+    const cur = map.get(code) || { code, name: '', count: 0 };
+    cur.count += 1;
+    if (!cur.name && l.authorTeacher) cur.name = l.authorTeacher;
+    map.set(code, cur);
+  }
+  return [...map.values()].sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+}
 
 export const isNumpadLesson = (l: Lesson): boolean =>
   !!l.isNumpad || l.category === 'numpad_tenkey' || /Bài\s+Numpad\s+\d+/i.test(l.title || '');
@@ -66,10 +89,11 @@ export const sortLessonsLogically = (lessons: Lesson[]): Lesson[] => {
  */
 export function applyLessonNumbers(lessons: Lesson[]): Lesson[] {
   const numberById = new Map<string, number>();
-  const groups = new Map<number, Lesson[]>();
+  // Đếm riêng theo (bộ bài, khối lớp)
+  const groups = new Map<string, Lesson[]>();
   for (const l of lessons) {
     if (!l || isNumpadLesson(l)) continue;
-    const g = l.gradeLevel || 0;
+    const g = `${lessonOwnerKey(l)}|${l.gradeLevel || 0}`;
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g)!.push(l);
   }
@@ -84,9 +108,18 @@ export function applyLessonNumbers(lessons: Lesson[]): Lesson[] {
   });
 }
 
-/** Số bài mới sẽ nhận khi thêm vào khối lớp (= số bài đang có trong khối + 1) */
-export function nextLessonNumber(lessons: Lesson[], gradeLevel: number, excludeId?: string | null): number {
-  return lessons.filter((l) => l && l.gradeLevel === gradeLevel && !isNumpadLesson(l) && l.id !== excludeId).length + 1;
+/** Số bài mới sẽ nhận khi thêm vào khối lớp (= số bài của cùng bộ bài trong khối + 1) */
+export function nextLessonNumber(
+  lessons: Lesson[],
+  gradeLevel: number,
+  excludeId?: string | null,
+  ownerKey = 'ADMIN'
+): number {
+  return (
+    lessons.filter(
+      (l) => l && l.gradeLevel === gradeLevel && !isNumpadLesson(l) && l.id !== excludeId && lessonOwnerKey(l) === ownerKey
+    ).length + 1
+  );
 }
 
 /** Số bài đang hiển thị (đọc từ tiêu đề đã đánh số) */

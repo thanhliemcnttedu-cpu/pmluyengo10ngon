@@ -90,9 +90,17 @@ Quy tắc nằm trong cơ sở dữ liệu Supabase nên không ai vượt quy�
 >
 > Xoá tài khoản giáo viên: bài người đó đã tạo **vẫn giữ lại**, admin quản lý tiếp.
 
+### Học sinh, giáo viên và quản trị thấy bài nào
+
+| Ai | Thấy bài nào |
+|---|---|
+| **Học sinh** | Mặc định chỉ thấy **bài hệ thống** (của quản trị). Muốn luyện bài của cô giáo: bấm **Chọn bài** → gõ **mã cô giáo** (vd `GV007` hoặc chỉ `7`) → Enter. Bài cô được **giao** cho khối lớp thì mở ở nút "Bài cô giáo giao", không cần mã. |
+| **Giáo viên phụ** | Mặc định **Bài soạn của tôi**; nút **Bài hệ thống** để xem tham khảo. Không thấy bài của giáo viên khác. |
+| **Quản trị** | Ô **Nguồn bài**: Tất cả / Bài hệ thống / Tất cả giáo viên / từng giáo viên (kèm số bài). Danh sách hiện 20 bài một lần, bấm **Xem thêm 20 bài**. Giao bài được cả bài của giáo viên. |
+
 ### Tự đánh số bài
 
-- Số **"Bài N"** do hệ thống tự đếm theo từng khối lớp (Lớp 3, 4, 5 đếm riêng). Người soạn chỉ gõ **tên bài**; ô "Bài N:" đứng trước ô tên tự hiện số.
+- Số **"Bài N"** do hệ thống tự đếm theo **từng bộ bài** và khối lớp: bài hệ thống Lớp 3 là Bài 1…N; bài của GV001 ở Lớp 3 cũng từ Bài 1…M (mỗi giáo viên đếm riêng). Người soạn chỉ gõ **tên bài**; ô "Bài N:" đứng trước ô tên tự hiện số.
 - Thêm bài mới: bài đứng cuối khối, nhận số = số bài đang có + 1 (đang có 17 bài thì bài mới là Bài 18).
 - Xoá bài: các bài phía sau tự lùi số (20 bài, xoá 1 bài còn 19, Bài 20 thành Bài 19).
 - Bài phím số Numpad giữ dãy số riêng "Bài Numpad N".

@@ -63,3 +63,23 @@ test('đánh số: bài Numpad giữ dãy số riêng', () => {
   assert.equal(t.find((l) => l.id === 'np')!.title, 'Bài Numpad 1: Phím số');
   assert.equal(nextLessonNumber(t, 4), 2);
 });
+
+test('đánh số: mỗi bộ bài (hệ thống, từng giáo viên) đếm riêng trong cùng lớp', () => {
+  const ls = [
+    mk('s1', 'Bài 1: Hệ thống một', 3),
+    mk('s2', 'Bài 2: Hệ thống hai', 3),
+    { ...mk('g1', 'Bài 1001: Bài cô Lan', 3), ownerCode: 'GV001' } as Lesson,
+    { ...mk('g2', 'Bài 1002: Bài cô Lan hai', 3), ownerCode: 'GV001' } as Lesson,
+    { ...mk('h1', 'Bài 9: Bài cô Hà', 3), ownerCode: 'GV002' } as Lesson,
+  ];
+  const t = applyLessonNumbers(ls);
+  const title = (id: string) => t.find((l) => l.id === id)!.title;
+  assert.equal(title('s2'), 'Bài 2: Hệ thống hai');
+  assert.equal(title('g1'), 'Bài 1: Bài cô Lan');
+  assert.equal(title('g2'), 'Bài 2: Bài cô Lan hai');
+  assert.equal(title('h1'), 'Bài 1: Bài cô Hà');
+  assert.equal(nextLessonNumber(t, 3), 3);
+  assert.equal(nextLessonNumber(t, 3, null, 'GV001'), 3);
+  assert.equal(nextLessonNumber(t, 3, null, 'GV002'), 2);
+  assert.equal(nextLessonNumber(t, 3, null, 'GV009'), 1);
+});

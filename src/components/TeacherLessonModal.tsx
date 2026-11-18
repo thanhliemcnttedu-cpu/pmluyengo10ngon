@@ -1,5 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { stripLessonNumber, isNumpadLesson, displayedLessonNumber, nextLessonNumber } from '../utils/lessonNumbering';
+import {
+  stripLessonNumber,
+  isNumpadLesson,
+  displayedLessonNumber,
+  nextLessonNumber,
+  lessonOwnerKey,
+  isSystemLesson,
+  teacherDirectory,
+} from '../utils/lessonNumbering';
 import {
   loginTeacher,
   logoutTeacher,
@@ -231,7 +239,10 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const [gradeFilter, setGradeFilter] = useState<number | 'all' | 'assigned' | 'poems'>('all');
   // Lọc thêm theo lớp khi đang xem Tất cả / Đang giao / Thơ & Văn SGK
   const [subGrade, setSubGrade] = useState<'all' | 3 | 4 | 5>('all');
-  const [onlyMine, setOnlyMine] = useState(false);
+  // Nguồn bài: admin 'all' | 'system' | 'teachers' | 'GV001'…; giáo viên phụ 'mine' | 'system'
+  const [lessonSource, setLessonSource] = useState<string>('all');
+  // Xem dần từng 20 bài cho nhẹ khi có hàng trăm bài (30 giáo viên × 20 bài)
+  const [visibleLimit, setVisibleLimit] = useState(20);
   const subGradeApplies = gradeFilter === 'all' || gradeFilter === 'assigned' || gradeFilter === 'poems';
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   const [sortBy, setSortBy] = useState<'hierarchy' | 'assigned_first' | 'poems_first' | 'title_az' | 'wpm_asc'>('hierarchy');
@@ -315,6 +326,10 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   });
   const [assignSearchKeyword, setAssignSearchKeyword] = useState<string>('');
   const [assignGradeFilter, setAssignGradeFilter] = useState<number | 'all'>(3);
+  // Giao bài: lọc theo nguồn bài (hệ thống / giáo viên) và mục (thơ – văn SGK / luyện phím)
+  const [assignSource, setAssignSource] = useState<string>('all');
+  const [assignCategory, setAssignCategory] = useState<'all' | 'poems' | 'practice'>('all');
+  const [assignLimit, setAssignLimit] = useState(30);
   const [assignNote, setAssignNote] = useState<string>('Các con hoàn thành các bài tập này trước tiết học Tin học tiếp theo nhé!');
   const [assignmentSuccessMsg, setAssignmentSuccessMsg] = useState<string>('');
 
@@ -347,11 +362,13 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   // Số "Bài N" sẽ hiện cho bài đang soạn: sửa bài trong cùng khối giữ số cũ, bài mới / đổi khối = số bài trong khối + 1
   const lessonNumberPreview = useMemo(() => {
     const orig = editingLessonId ? effectiveLessons.find((l) => l.id === editingLessonId) : undefined;
+    // Bộ bài: sửa bài thì theo người tạo bài đó; bài mới thì theo tài khoản đang soạn
+    const owner = orig ? lessonOwnerKey(orig) : teacherSession?.role === 'teacher' ? teacherSession.code : 'ADMIN';
     if (orig && orig.gradeLevel === gradeLevel) {
-      return displayedLessonNumber(orig) ?? nextLessonNumber(effectiveLessons, gradeLevel, editingLessonId);
+      return displayedLessonNumber(orig) ?? nextLessonNumber(effectiveLessons, gradeLevel, editingLessonId, owner);
     }
-    return nextLessonNumber(effectiveLessons, gradeLevel, editingLessonId);
-  }, [effectiveLessons, editingLessonId, gradeLevel]);
+    return nextLessonNumber(effectiveLessons, gradeLevel, editingLessonId, owner);
+  }, [effectiveLessons, editingLessonId, gradeLevel, teacherSession?.role, teacherSession?.code]);
 
   // Lấy danh sách ID của tất cả bài đang được giao bài cho bất kỳ lớp nào (Safely)
   const allAssignedLessonIds = useMemo(() => {
@@ -1088,6 +1105,10 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
       const gradeA = a.gradeLevel || 3;
       const gradeB = b.gradeLevel || 3;
       if (gradeA !== gradeB) return gradeA - gradeB;
+      // Cùng lớp: bài hệ thống trước, rồi lần lượt từng giáo viên (GV001, GV002…), mỗi bộ theo số bài
+      const ownA = isSystemLesson(a) ? '' : lessonOwnerKey(a);
+      const ownB = isSystemLesson(b) ? '' : lessonOwnerKey(b);
+      if (ownA !== ownB) return ownA.localeCompare(ownB, undefined, { numeric: true });
       const numA = displayedLessonNumber(a) ?? 100000 + (a.level || 0);
       const numB = displayedLessonNumber(b) ?? 100000 + (b.level || 0);
       return numA - numB;
@@ -1120,22 +1141,42 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   };
 
   // Filter lessons in manage tab
-  // "Bài soạn của tôi": chỉ bài do tài khoản đang đăng nhập tạo (GV001…); admin: bài của quản trị
-  const isMyLesson = (l: Lesson): boolean => {
-    if (!teacherSession || !l) return false;
-    if (teacherSession.role === 'admin') return !l.ownerCode || l.ownerCode === 'ADMIN';
-    return l.ownerCode === teacherSession.code || (!!teacherSession.userId && l.ownerId === teacherSession.userId);
-  };
+  const isTeacherRole = teacherSession?.role === 'teacher';
+  // Bài do chính giáo viên phụ đang đăng nhập soạn
+  const isMyLesson = (l: Lesson): boolean =>
+    !!teacherSession &&
+    !!l &&
+    (lessonOwnerKey(l) === teacherSession.code || (!!teacherSession.userId && l.ownerId === teacherSession.userId));
   const myLessonCount = useMemo(
-    () => effectiveLessons.filter(isMyLesson).length,
+    () => (isTeacherRole ? effectiveLessons.filter(isMyLesson).length : 0),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [effectiveLessons, teacherSession?.code, teacherSession?.userId]
+    [effectiveLessons, isTeacherRole, teacherSession?.code, teacherSession?.userId]
   );
-  const manageSource = useMemo(
-    () => (onlyMine ? effectiveLessons.filter(isMyLesson) : effectiveLessons),
+  const systemLessonCount = useMemo(() => effectiveLessons.filter((l) => l && isSystemLesson(l)).length, [effectiveLessons]);
+  const teacherDir = useMemo(() => teacherDirectory(effectiveLessons), [effectiveLessons]);
+  const teacherLessonTotal = useMemo(() => teacherDir.reduce((n, t) => n + t.count, 0), [teacherDir]);
+
+  // Đăng nhập giáo viên phụ: mặc định xem bài của mình; admin: xem tất cả
+  useEffect(() => {
+    setLessonSource(isTeacherRole ? 'mine' : 'all');
+  }, [isTeacherRole, teacherSession?.code]);
+
+  const manageSource = useMemo(() => {
+    if (isTeacherRole) {
+      // Giáo viên phụ chỉ thấy bài của mình hoặc bài hệ thống, không thấy bài giáo viên khác
+      return lessonSource === 'system' ? effectiveLessons.filter((l) => l && isSystemLesson(l)) : effectiveLessons.filter(isMyLesson);
+    }
+    if (lessonSource === 'system') return effectiveLessons.filter((l) => l && isSystemLesson(l));
+    if (lessonSource === 'teachers') return effectiveLessons.filter((l) => l && !isSystemLesson(l));
+    if (lessonSource !== 'all') return effectiveLessons.filter((l) => l && lessonOwnerKey(l) === lessonSource);
+    return effectiveLessons;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [effectiveLessons, onlyMine, teacherSession?.code, teacherSession?.userId]
-  );
+  }, [effectiveLessons, lessonSource, isTeacherRole, teacherSession?.code, teacherSession?.userId]);
+
+  // Đổi bộ lọc thì quay về 20 bài đầu
+  useEffect(() => {
+    setVisibleLimit(20);
+  }, [lessonSource, gradeFilter, subGrade, searchKeyword, sortBy]);
 
   const filteredManageLessons = useMemo(() => {
     const result = manageSource.filter((l) => {
@@ -1748,21 +1789,49 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                   {/* Bộ lọc (gồm cả Thơ & Văn SGK) · tìm kiếm · sắp xếp */}
                   <div className="flex items-center gap-2 flex-wrap">
                     <div className="flex items-center gap-1 flex-wrap" role="group" aria-label="Lọc bài học">
-                      {teacherSession && (
-                        <button
-                          type="button"
-                          onClick={() => setOnlyMine((v) => !v)}
-                          aria-pressed={onlyMine}
-                          data-testid="filter-my-lessons"
-                          title={`Chỉ hiện các bài do tài khoản ${teacherSession.code} soạn, chia theo lớp và mục`}
-                          className={`h-9 px-3 rounded-full text-sm font-black transition-colors cursor-pointer mr-1 ${
-                            onlyMine
-                              ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300'
-                              : 'bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100'
-                          }`}
-                        >
-                          ✍️ Bài soạn của tôi ({myLessonCount})
-                        </button>
+                      {/* NGUỒN BÀI: giáo viên phụ 2 nút; admin ô chọn theo từng giáo viên */}
+                      {isTeacherRole ? (
+                        <div className="flex items-center gap-1 mr-1" role="group" aria-label="Nguồn bài">
+                          {([
+                            { val: 'mine', label: `✍️ Bài soạn của tôi (${myLessonCount})` },
+                            { val: 'system', label: `📚 Bài hệ thống (${systemLessonCount})` },
+                          ]).map((o) => (
+                            <button
+                              key={o.val}
+                              type="button"
+                              onClick={() => setLessonSource(o.val)}
+                              aria-pressed={lessonSource === o.val}
+                              data-testid={o.val === 'mine' ? 'filter-my-lessons' : 'filter-system-lessons'}
+                              className={`h-9 px-3 rounded-full text-sm font-black transition-colors cursor-pointer ${
+                                lessonSource === o.val
+                                  ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300'
+                                  : 'bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100'
+                              }`}
+                            >
+                              {o.label}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <label className="h-9 flex items-center gap-1.5 pl-3 pr-1 mr-1 rounded-full bg-amber-50 border border-amber-300 text-sm font-black text-amber-900">
+                          Nguồn bài:
+                          <select
+                            value={lessonSource}
+                            onChange={(e) => setLessonSource(e.target.value)}
+                            data-testid="filter-lesson-source"
+                            className="h-7 max-w-[260px] px-2 rounded-full bg-white border border-amber-300 text-sm font-bold text-slate-800 cursor-pointer"
+                          >
+                            <option value="all">Tất cả ({effectiveLessons.length})</option>
+                            <option value="system">Bài hệ thống – quản trị ({systemLessonCount})</option>
+                            <option value="teachers">Tất cả giáo viên ({teacherLessonTotal})</option>
+                            {teacherDir.map((t) => (
+                              <option key={t.code} value={t.code}>
+                                {t.code}
+                                {t.name ? ` – ${t.name}` : ''} ({t.count} bài)
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                       )}
                       {[
                         { label: 'Tất cả', val: 'all' as const },
@@ -1855,12 +1924,33 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                             <h4 className={`px-3 py-1.5 text-xs font-black uppercase tracking-wide border-y border-slate-200 ${group.id === 'group-assigned' ? 'bg-rose-50 text-rose-800' : 'bg-slate-50 text-slate-700'}`}>
                               {group.id === 'group-assigned' ? '🎯 Đang giao cho học sinh' : group.badge} · {group.lessons.length} bài
                             </h4>
-                            <ul>{group.lessons.map((lesson) => renderLessonRow(lesson))}</ul>
+                            <ul>{group.lessons.slice(0, visibleLimit).map((lesson) => renderLessonRow(lesson))}</ul>
+                            {group.lessons.length > visibleLimit && (
+                              <button
+                                type="button"
+                                onClick={() => setVisibleLimit((n) => n + 20)}
+                                className="w-full py-2 text-sm font-bold text-emerald-700 bg-emerald-50/60 hover:bg-emerald-100 border-t border-slate-100 cursor-pointer"
+                              >
+                                Xem thêm 20 bài (còn {group.lessons.length - visibleLimit} bài)
+                              </button>
+                            )}
                           </section>
                         )
                       )
                     ) : filteredManageLessons.length > 0 ? (
-                      <ul>{filteredManageLessons.map((lesson) => renderLessonRow(lesson))}</ul>
+                      <>
+                        <ul>{filteredManageLessons.slice(0, visibleLimit).map((lesson) => renderLessonRow(lesson))}</ul>
+                        {filteredManageLessons.length > visibleLimit && (
+                          <button
+                            type="button"
+                            onClick={() => setVisibleLimit((n) => n + 20)}
+                            data-testid="manage-load-more"
+                            className="w-full py-2.5 text-sm font-bold text-emerald-700 bg-emerald-50/60 hover:bg-emerald-100 border-t border-slate-100 cursor-pointer"
+                          >
+                            Xem thêm 20 bài (đang hiện {visibleLimit}/{filteredManageLessons.length})
+                          </button>
+                        )}
+                      </>
                     ) : (
                       <p className="p-6 text-center text-sm text-slate-500">Không có bài nào khớp bộ lọc hoặc từ khoá.</p>
                     )}
@@ -2416,40 +2506,68 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
               {/* ========================================================================= */}
               {/* TAB 4: GIAO 1 HOẶC NHIỀU BÀI TẬP CÙNG LÚC CHO KHỐI LỚP (ASSIGN TAB)       */}
               {/* ========================================================================= */}
-              {activeTab === 'assign' && isAdminRole && (
-                <form onSubmit={handleAssignSubmit} className="space-y-4 max-w-4xl mx-auto py-1">
-                  <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-50 via-teal-50 to-sky-50 border-2 border-emerald-300 text-center shadow-xs">
-                    <span className="text-2xl mb-0.5 block">🎯</span>
-                    <h3 className="font-black text-sm sm:text-base text-slate-900">
-                      Giao 1 Hoặc Nhiều Bài Tập Cùng Lúc Cho Khối Lớp
-                    </h3>
-                    <p className="text-xs text-slate-600 mt-0.5">
-                      Cô có thể giao <strong>1 bài, 2 bài, 3 bài hoặc nhiều bài</strong> cho Khối Lớp (Lớp 3, 4, 5). Học sinh thuộc khối lớp sẽ thấy ngay các bài tập cô giao để lần lượt luyện tập.
-                    </p>
-                  </div>
-
-                  {assignmentSuccessMsg && (
-                    <div className="p-3 rounded-2xl bg-emerald-100 border border-emerald-300 text-emerald-950 font-bold text-xs flex items-center gap-2 animate-in fade-in">
-                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                      <span>{assignmentSuccessMsg}</span>
+              {activeTab === 'assign' && isAdminRole && (() => {
+                // Danh sách bài để chọn: lọc theo khối, nguồn bài, mục và từ khoá; xếp theo lớp rồi số bài
+                const kw = assignSearchKeyword.trim().toLowerCase();
+                const pickList = effectiveLessons
+                  .filter((l) => {
+                    if (!l) return false;
+                    if (assignGradeFilter !== 'all' && l.gradeLevel !== assignGradeFilter) return false;
+                    if (assignSource === 'system' && !isSystemLesson(l)) return false;
+                    if (assignSource === 'teachers' && isSystemLesson(l)) return false;
+                    if (!['all', 'system', 'teachers'].includes(assignSource) && lessonOwnerKey(l) !== assignSource) return false;
+                    const isPoem = !!l.isPoemOrStory || l.category === 'poems_stories';
+                    if (assignCategory === 'poems' && !isPoem) return false;
+                    if (assignCategory === 'practice' && isPoem) return false;
+                    if (kw && !(l.title || '').toLowerCase().includes(kw) && !(l.text || '').toLowerCase().includes(kw)) return false;
+                    return true;
+                  })
+                  .sort((a, b) => {
+                    const g = (a.gradeLevel || 0) - (b.gradeLevel || 0);
+                    if (g) return g;
+                    const o = (isSystemLesson(a) ? '' : lessonOwnerKey(a)).localeCompare(isSystemLesson(b) ? '' : lessonOwnerKey(b), undefined, { numeric: true });
+                    if (o) return o;
+                    return (displayedLessonNumber(a) ?? 9999) - (displayedLessonNumber(b) ?? 9999);
+                  });
+                const chosen = validSelectedLessonIds
+                  .map((id) => effectiveLessons.find((l) => l.id === id))
+                  .filter((l): l is Lesson => !!l);
+                const move = (idx: number, dir: -1 | 1) => {
+                  const ids = [...validSelectedLessonIds];
+                  const j = idx + dir;
+                  if (j < 0 || j >= ids.length) return;
+                  [ids[idx], ids[j]] = [ids[j], ids[idx]];
+                  setSelectedLessonIdsForAssign(ids);
+                };
+                const ownerBadge = (l: Lesson) =>
+                  isSystemLesson(l) ? (
+                    <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-700">Hệ thống</span>
+                  ) : (
+                    <span className="text-[11px] font-black px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-900">{lessonOwnerKey(l)}</span>
+                  );
+                return (
+                  <form onSubmit={handleAssignSubmit} className="space-y-4 py-1" data-testid="assign-panel">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <h3 className="text-lg font-black text-slate-900">🎯 Giao bài cho khối lớp</h3>
+                        <p className="text-sm text-slate-600">
+                          Chọn khối lớp, tích chọn các bài ở bên trái, sắp thứ tự ở bên phải rồi bấm <b>Giao bài</b>. Học sinh khối đó thấy ngay ở nút "Bài cô giáo giao".
+                        </p>
+                      </div>
                     </div>
-                  )}
 
-                  {/* 1. Chọn Khối Lớp */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="text-xs font-black text-slate-800 uppercase tracking-wider">
-                        1. Chọn Khối Lớp để giao bài:
-                      </label>
-                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                        Đang giao cho: Khối Lớp {selectedGradeForAssign}
-                      </span>
-                    </div>
+                    {assignmentSuccessMsg && (
+                      <div className="p-3 rounded-2xl bg-emerald-100 border border-emerald-300 text-emerald-950 font-bold text-sm flex items-center gap-2">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                        <span>{assignmentSuccessMsg}</span>
+                      </div>
+                    )}
 
-                    <div className="grid grid-cols-3 gap-2">
+                    {/* 1. Khối lớp */}
+                    <div className="grid grid-cols-3 gap-2" role="group" aria-label="Chọn khối lớp">
                       {[3, 4, 5].map((g) => {
-                        const isSelected = selectedGradeForAssign === g;
-                        const existingCount = Array.isArray(safeAssignments[g]?.lessonIds)
+                        const isSel = selectedGradeForAssign === g;
+                        const n = Array.isArray(safeAssignments[g]?.lessonIds)
                           ? safeAssignments[g].lessonIds.length
                           : safeAssignments[g]?.lessonId
                           ? 1
@@ -2459,245 +2577,204 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                             key={g}
                             type="button"
                             onClick={() => handleSelectGradeForAssign(g)}
-                            className={`py-2 px-3 rounded-xl font-black text-xs sm:text-sm transition-all cursor-pointer border flex flex-col items-center justify-center gap-0.5 ${
-                              isSelected
-                                ? 'bg-emerald-600 text-white border-emerald-800 shadow-md ring-2 ring-emerald-300 scale-102'
-                                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-300'
+                            aria-pressed={isSel}
+                            className={`min-h-[56px] px-3 rounded-2xl border-2 cursor-pointer transition-colors flex flex-col items-center justify-center ${
+                              isSel ? 'bg-emerald-600 border-emerald-700 text-white shadow-md' : 'bg-white border-slate-200 text-slate-800 hover:bg-slate-50'
                             }`}
                           >
-                            <span>Khối Lớp {g}</span>
-                            {existingCount > 0 && (
-                              <span className={`text-[10px] font-bold px-1.5 rounded-full ${isSelected ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'}`}>
-                                Đang có {existingCount} bài
-                              </span>
-                            )}
+                            <span className="text-base font-black">Khối Lớp {g}</span>
+                            <span className={`text-xs font-bold ${isSel ? 'text-emerald-50' : 'text-slate-500'}`}>
+                              {n > 0 ? `Đang giao ${n} bài` : 'Chưa giao bài'}
+                            </span>
                           </button>
                         );
                       })}
                     </div>
-                  </div>
 
-                  {/* 2. Chọn 1 Hoặc Nhiều Bài Học */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between flex-wrap gap-2">
-                      <label className="text-xs font-black text-slate-800 uppercase tracking-wider">
-                        2. Chọn các bài học muốn giao ({validSelectedLessonIds.length} bài đã chọn):
-                      </label>
-
-                      {/* Quick preset buttons */}
-                      <div className="flex items-center gap-1 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => handleQuickSelectCount(1)}
-                          className="px-2 py-0.5 text-[11px] font-bold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 cursor-pointer"
-                        >
-                          ⚡ Giao 1 bài
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleQuickSelectCount(2)}
-                          className="px-2 py-0.5 text-[11px] font-bold rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-800 border border-sky-300 cursor-pointer"
-                        >
-                          ⚡ Giao 2 bài
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleQuickSelectCount(3)}
-                          className="px-2 py-0.5 text-[11px] font-bold rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-300 cursor-pointer"
-                        >
-                          ⚡ Giao 3 bài
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleSelectAllForGrade}
-                          className="px-2 py-0.5 text-[11px] font-bold rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-800 border border-indigo-300 cursor-pointer"
-                        >
-                          📚 Toàn bộ Lớp {selectedGradeForAssign}
-                        </button>
-                        {selectedLessonIdsForAssign.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setSelectedLessonIdsForAssign([])}
-                            className="px-2 py-0.5 text-[11px] font-bold rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 cursor-pointer"
-                          >
-                            ✕ Bỏ chọn
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Chips of currently selected lessons */}
-                    {validSelectedLessonIds.length > 0 && (
-                      <div className="p-2 rounded-xl bg-emerald-50/80 border border-emerald-200 flex flex-wrap gap-1.5 items-center">
-                        <span className="text-[11px] font-black text-emerald-900 shrink-0">
-                          Đã chọn ({validSelectedLessonIds.length}):
-                        </span>
-                        {validSelectedLessonIds.map((id, sIdx) => {
-                          const item = effectiveLessons.find((l) => l.id === id);
-                          if (!item) return null;
-                          return (
-                            <span
-                              key={`chip-${id}`}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-emerald-300 text-[11px] font-bold text-emerald-950 shadow-2xs"
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px] items-start">
+                      {/* 2. Chọn bài */}
+                      <section className="rounded-2xl border-2 border-slate-200 bg-white overflow-hidden" aria-label="Chọn bài để giao">
+                        <div className="px-3 py-2.5 bg-slate-50 border-b border-slate-200 space-y-2">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <h4 className="text-sm font-black text-slate-800">Chọn bài ({pickList.length} bài)</h4>
+                            <button
+                              type="button"
+                              onClick={handleSelectAllForGrade}
+                              className="text-xs font-bold px-2.5 py-1 rounded-full bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 cursor-pointer"
                             >
-                              <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[9px] font-black flex items-center justify-center">
-                                {sIdx + 1}
-                              </span>
-                              <span className="truncate max-w-[160px]">{item.title}</span>
+                              Chọn toàn bộ Lớp {selectedGradeForAssign}
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <select
+                              value={assignGradeFilter}
+                              onChange={(e) => setAssignGradeFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+                              aria-label="Lọc theo lớp"
+                              className="h-9 px-2 rounded-xl bg-white border border-slate-300 text-sm font-bold cursor-pointer"
+                            >
+                              <option value="all">Mọi lớp</option>
+                              <option value={3}>Lớp 3</option>
+                              <option value={4}>Lớp 4</option>
+                              <option value={5}>Lớp 5</option>
+                            </select>
+                            <select
+                              value={assignSource}
+                              onChange={(e) => setAssignSource(e.target.value)}
+                              aria-label="Nguồn bài"
+                              data-testid="assign-source"
+                              className="h-9 max-w-[220px] px-2 rounded-xl bg-white border border-slate-300 text-sm font-bold cursor-pointer"
+                            >
+                              <option value="all">Mọi nguồn bài</option>
+                              <option value="system">Bài hệ thống</option>
+                              <option value="teachers">Bài của giáo viên</option>
+                              {teacherDir.map((t) => (
+                                <option key={t.code} value={t.code}>
+                                  {t.code}
+                                  {t.name ? ` – ${t.name}` : ''} ({t.count})
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={assignCategory}
+                              onChange={(e) => setAssignCategory(e.target.value as 'all' | 'poems' | 'practice')}
+                              aria-label="Mục bài"
+                              className="h-9 px-2 rounded-xl bg-white border border-slate-300 text-sm font-bold cursor-pointer"
+                            >
+                              <option value="all">Mọi mục</option>
+                              <option value="poems">Thơ & Văn SGK</option>
+                              <option value="practice">Luyện phím</option>
+                            </select>
+                            <label className="h-9 flex-1 min-w-[160px] flex items-center gap-1.5 bg-white px-3 rounded-xl border border-slate-300">
+                              <Search className="w-4 h-4 text-slate-400 shrink-0" />
+                              <input
+                                type="search"
+                                value={assignSearchKeyword}
+                                onChange={(e) => setAssignSearchKeyword(e.target.value)}
+                                placeholder="Tìm tên bài…"
+                                aria-label="Tìm bài"
+                                className="w-full text-sm bg-transparent focus:outline-none"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                        <ul className="max-h-[420px] overflow-y-auto divide-y divide-slate-100 custom-scrollbar" data-testid="assign-pick-list">
+                          {pickList.length === 0 && (
+                            <li className="p-6 text-center text-sm text-slate-500">Không có bài nào khớp bộ lọc.</li>
+                          )}
+                          {pickList.slice(0, assignLimit).map((l) => {
+                            const order = validSelectedLessonIds.indexOf(l.id);
+                            const isChecked = order >= 0;
+                            const isPoem = !!l.isPoemOrStory || l.category === 'poems_stories';
+                            return (
+                              <li key={`assign-pick-${l.id}`}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleLessonSelection(l.id)}
+                                  aria-pressed={isChecked}
+                                  className={`w-full text-left px-3 py-2.5 flex items-center gap-3 cursor-pointer transition-colors ${
+                                    isChecked ? 'bg-emerald-50' : 'hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <span
+                                    className={`w-7 h-7 rounded-lg border-2 shrink-0 flex items-center justify-center text-sm font-black ${
+                                      isChecked ? 'bg-emerald-600 border-emerald-700 text-white' : 'bg-white border-slate-300 text-transparent'
+                                    }`}
+                                  >
+                                    {isChecked ? order + 1 : ''}
+                                  </span>
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block text-sm font-bold text-slate-900 truncate">{l.title}</span>
+                                    <span className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                                      <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-sky-100 text-sky-800">Lớp {l.gradeLevel || '?'}</span>
+                                      {ownerBadge(l)}
+                                      {isPoem && <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-purple-100 text-purple-800">Thơ/Văn SGK</span>}
+                                      <span className="text-[11px] font-semibold text-slate-500">{l.targetWpm || 18} WPM</span>
+                                      {l.imageUrl && <span className="text-[11px] font-semibold text-slate-500">· có ảnh SGK</span>}
+                                    </span>
+                                  </span>
+                                  <span className={`shrink-0 text-xs font-black px-2.5 py-1 rounded-full ${isChecked ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                                    {isChecked ? 'Đã chọn' : '+ Chọn'}
+                                  </span>
+                                </button>
+                              </li>
+                            );
+                          })}
+                          {pickList.length > assignLimit && (
+                            <li>
                               <button
                                 type="button"
-                                onClick={() => handleToggleLessonSelection(id)}
-                                className="text-slate-400 hover:text-rose-600 font-black ml-0.5 cursor-pointer"
-                                title="Bỏ chọn bài này"
+                                onClick={() => setAssignLimit((n) => n + 30)}
+                                className="w-full py-2.5 text-sm font-bold text-emerald-700 hover:bg-emerald-50 cursor-pointer"
                               >
-                                ×
+                                Xem thêm 30 bài (còn {pickList.length - assignLimit} bài)
                               </button>
-                            </span>
-                          );
-                        })}
-                      </div>
-                    )}
+                            </li>
+                          )}
+                        </ul>
+                      </section>
 
-                    {/* Filter and Search within Assignment modal */}
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                        <input
-                          type="text"
-                          value={assignSearchKeyword}
-                          onChange={(e) => setAssignSearchKeyword(e.target.value)}
-                          placeholder="Tìm bài học theo tên hoặc nội dung..."
-                          className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-slate-50 border border-slate-300 text-xs focus:outline-none focus:border-emerald-500"
-                        />
-                      </div>
-                      <select
-                        value={assignGradeFilter}
-                        onChange={(e) =>
-                          setAssignGradeFilter(
-                            e.target.value === 'all' ? 'all' : Number(e.target.value)
-                          )
-                        }
-                        className="px-2.5 py-1.5 rounded-xl bg-slate-50 border border-slate-300 text-xs font-bold focus:outline-none cursor-pointer"
-                      >
-                        <option value="all">Tất cả khối lớp</option>
-                        <option value={3}>Chỉ bài Lớp 3</option>
-                        <option value={4}>Chỉ bài Lớp 4</option>
-                        <option value={5}>Chỉ bài Lớp 5</option>
-                      </select>
-                    </div>
-
-                    {/* Lesson Checkbox List */}
-                    <div className="max-h-[280px] overflow-y-auto space-y-1.5 border-2 border-slate-200 rounded-2xl p-2 bg-slate-50/50 custom-scrollbar">
-                      {effectiveLessons
-                        .filter((l) => {
-                          if (assignGradeFilter !== 'all' && l.gradeLevel !== assignGradeFilter)
-                            return false;
-                          if (assignSearchKeyword.trim()) {
-                            const kw = assignSearchKeyword.toLowerCase();
-                            return (
-                              (l.title || '').toLowerCase().includes(kw) || (l.text || '').toLowerCase().includes(kw)
-                            );
-                          }
-                          return true;
-                        })
-                        .map((l) => {
-                          const isChecked = selectedLessonIdsForAssign.includes(l.id);
-                          const checkOrderIndex = selectedLessonIdsForAssign.indexOf(l.id);
-
-                          return (
-                            <div
-                              key={`assign-row-${l.id}`}
-                              onClick={() => handleToggleLessonSelection(l.id)}
-                              className={`p-2 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2.5 select-none ${
-                                isChecked
-                                  ? 'bg-emerald-50 border-emerald-400 shadow-2xs'
-                                  : 'bg-white hover:bg-slate-100 border-slate-200'
-                              }`}
+                      {/* 3. Bài sẽ giao + lời dặn + nút giao */}
+                      <section className="rounded-2xl border-2 border-emerald-300 bg-emerald-50/40 p-3 space-y-3 lg:sticky lg:top-2" aria-label="Bài sẽ giao">
+                        <div className="flex items-center justify-between gap-2">
+                          <h4 className="text-sm font-black text-emerald-900">
+                            Bài sẽ giao cho Lớp {selectedGradeForAssign} ({chosen.length})
+                          </h4>
+                          {chosen.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedLessonIdsForAssign([])}
+                              className="text-xs font-bold px-2 py-1 rounded-full text-rose-700 hover:bg-rose-50 cursor-pointer"
                             >
-                              <div className="flex items-center gap-2.5 min-w-0">
-                                <div
-                                  className={`w-5 h-5 rounded-md flex items-center justify-center font-black text-xs shrink-0 transition-colors border ${
-                                    isChecked
-                                      ? 'bg-emerald-600 border-emerald-700 text-white shadow-2xs'
-                                      : 'bg-white border-slate-300 text-transparent'
-                                  }`}
-                                >
-                                  {isChecked ? (checkOrderIndex >= 0 ? checkOrderIndex + 1 : '✓') : ''}
-                                </div>
-
-                                <div className="min-w-0">
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <h4 className="font-black text-xs text-slate-900 truncate">
-                                      {l.title}
-                                    </h4>
-                                    {l.gradeLevel && (
-                                      <span className="text-[10px] bg-sky-100 text-sky-800 font-bold px-1.5 py-0.2 rounded">
-                                        Lớp {l.gradeLevel}
-                                      </span>
-                                    )}
-                                    {l.isPoemOrStory && (
-                                      <span className="text-[10px] bg-purple-100 text-purple-800 font-bold px-1.5 py-0.2 rounded">
-                                        Thơ/Văn SGK
-                                      </span>
-                                    )}
-                                    <span className="text-[10px] text-slate-500 font-medium">
-                                      🎯 {l.targetWpm || 18} WPM
-                                    </span>
-                                  </div>
-                                  <p className="text-[11px] text-slate-600 truncate font-semibold mt-0.5 tracking-wide">
-                                    {l.text}
-                                  </p>
-                                </div>
-                              </div>
-
-                              <div className="shrink-0 flex items-center gap-1">
-                                {l.imageUrl && (
-                                  <span className="text-xs" title="Có ảnh SGK">
-                                    🖼️
+                              Bỏ chọn hết
+                            </button>
+                          )}
+                        </div>
+                        {chosen.length === 0 ? (
+                          <p className="text-sm text-slate-600 bg-white rounded-xl border border-dashed border-emerald-300 p-3">
+                            Chưa chọn bài nào. Bấm vào bài ở danh sách bên trái để thêm.
+                          </p>
+                        ) : (
+                          <ol className="space-y-1.5 max-h-[300px] overflow-y-auto custom-scrollbar" data-testid="assign-chosen-list">
+                            {chosen.map((l, idx) => (
+                              <li key={`chosen-${l.id}`} className="flex items-center gap-2 bg-white rounded-xl border border-emerald-200 px-2 py-1.5">
+                                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-black flex items-center justify-center shrink-0">{idx + 1}</span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block text-sm font-bold text-slate-900 truncate">{l.title}</span>
+                                  <span className="text-[11px] text-slate-500 font-semibold">
+                                    Lớp {l.gradeLevel || '?'} · {isSystemLesson(l) ? 'Hệ thống' : lessonOwnerKey(l)}
                                   </span>
-                                )}
-                                <span
-                                  className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                                    isChecked
-                                      ? 'bg-emerald-600 text-white'
-                                      : 'bg-slate-100 text-slate-600'
-                                  }`}
-                                >
-                                  {isChecked ? `Bài số ${checkOrderIndex + 1}` : '+ Chọn bài'}
                                 </span>
-                              </div>
-                            </div>
-                          );
-                        })}
+                                <button type="button" onClick={() => move(idx, -1)} disabled={idx === 0} title="Lên trên" className="w-7 h-7 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-30 cursor-pointer">▲</button>
+                                <button type="button" onClick={() => move(idx, 1)} disabled={idx === chosen.length - 1} title="Xuống dưới" className="w-7 h-7 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-30 cursor-pointer">▼</button>
+                                <button type="button" onClick={() => handleToggleLessonSelection(l.id)} title="Bỏ bài này" className="w-7 h-7 rounded-lg text-rose-600 hover:bg-rose-50 font-black cursor-pointer">×</button>
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                        <div>
+                          <label className="block text-xs font-black text-slate-700 mb-1">Lời dặn gửi các con</label>
+                          <textarea
+                            rows={3}
+                            value={assignNote}
+                            onChange={(e) => setAssignNote(e.target.value)}
+                            placeholder="Ví dụ: Tuần này các con hoàn thành các bài này trước tiết Tin học nhé!"
+                            className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-slate-900 text-sm focus:outline-none focus:border-emerald-500"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={chosen.length === 0}
+                          data-testid="assign-submit"
+                          className="w-full min-h-[48px] px-4 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-black text-base flex items-center justify-center gap-2 shadow-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Send className="w-4 h-4" />
+                          Giao {chosen.length} bài cho Lớp {selectedGradeForAssign}
+                        </button>
+                      </section>
                     </div>
-                  </div>
-
-                  {/* 3. Lời Dặn Dò Của Thầy Cô */}
-                  <div>
-                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
-                      3. Lời dặn dò của Cô gửi tới các con:
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={assignNote}
-                      onChange={(e) => setAssignNote(e.target.value)}
-                      placeholder="Ví dụ: Tuần này các con Lớp 3 hoàn thành 3 bài tập này trước tiết học Tin học nhé!"
-                      className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-300 text-slate-900 text-xs font-medium focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-
-                  {/* Nút gửi giao bài */}
-                  <button
-                    type="submit"
-                    className="w-full py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg border-b-2 border-emerald-800 active:border-b-0 cursor-pointer active:scale-98 transition-all"
-                  >
-                    <Send className="w-4 h-4" />
-                    <span>
-                      Xác Nhận Giao {validSelectedLessonIds.length} Bài Tập Cho Khối Lớp {selectedGradeForAssign}
-                    </span>
-                  </button>
-                </form>
-              )}
+                  </form>
+                );
+              })()}
 
               {activeTab === 'settings' && classroomSettings && (
                 <div className="space-y-3 max-w-4xl" data-testid="classroom-settings">
