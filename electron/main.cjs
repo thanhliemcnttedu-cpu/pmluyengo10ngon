@@ -208,9 +208,76 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// TỰ CẬP NHẬT PHẦN MỀM TỪ GITHUB RELEASES (electron-updater)
+// Tác giả đăng bản mới lên https://github.com/videodayhoctruyenhinhtanuyen-ux/be-luyen-go-10-ngon/releases
+// kèm 3 tệp: BeLuyenGo10Ngon-Setup-<phiên bản>.exe, latest.yml, .exe.blockmap.
+// Phần mềm đã cài: mở lên một lúc thì tự hỏi GitHub, có bản mới thì tải ngầm (chỉ tải phần thay đổi
+// nếu được), tải xong hỏi "Cập nhật ngay?"; chọn "Để sau" thì tự cài khi tắt phần mềm.
+// Lỗi mạng / chưa có bản mới: im lặng, không làm phiền học sinh.
+// ---------------------------------------------------------------------------
+const UPDATE_FIRST_CHECK_MS = 10 * 1000;
+const UPDATE_RECHECK_MS = 4 * 60 * 60 * 1000; // để máy mở cả ngày vẫn nhận bản mới
+
+function setupAutoUpdate() {
+  if (!app.isPackaged || FORCE_OFFLINE || process.env.LUYENGO_NO_UPDATE === '1') return;
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+  } catch (err) {
+    console.log('[luyen-go] Khong nap duoc electron-updater:', err && err.message);
+    return;
+  }
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  // Dành cho người phát triển thử trên máy: lấy bản cập nhật từ một thư mục web khác thay cho GitHub
+  if (process.env.LUYENGO_UPDATE_URL) {
+    autoUpdater.setFeedURL({ provider: 'generic', url: process.env.LUYENGO_UPDATE_URL });
+  }
+  autoUpdater.logger = {
+    info: (m) => console.log('[cap-nhat]', m),
+    warn: (m) => console.log('[cap-nhat] canh bao:', m),
+    error: (m) => console.log('[cap-nhat] loi:', m),
+    debug: () => {},
+  };
+
+  let asked = false;
+  autoUpdater.on('update-available', (info) => console.log('[luyen-go] Co ban moi', info && info.version, '-> dang tai'));
+  autoUpdater.on('update-not-available', () => console.log('[luyen-go] Dang dung ban moi nhat', app.getVersion()));
+  autoUpdater.on('error', (err) => console.log('[luyen-go] Loi kiem tra cap nhat:', err && err.message));
+  autoUpdater.on('update-downloaded', async (info) => {
+    if (asked) return;
+    asked = true;
+    const version = (info && info.version) || '';
+    const opts = {
+      type: 'info',
+      title: 'Có bản cập nhật mới',
+      message: `Đã tải xong bản cập nhật ${version} của Bé Luyện Gõ 10 Ngón.`,
+      detail:
+        'Bấm "Cập nhật ngay" để cài (phần mềm tự tắt và mở lại sau khoảng nửa phút; Windows có thể hỏi quyền, bấm Yes).\n' +
+        'Bấm "Để sau" thì bản mới sẽ tự cài khi tắt phần mềm.',
+      buttons: ['Cập nhật ngay', 'Để sau'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    };
+    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    const { response } = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
+    if (response === 0) {
+      // Cài im lặng (không hiện lại các trang Next) rồi tự mở lại phần mềm
+      setImmediate(() => autoUpdater.quitAndInstall(true, true));
+    }
+  });
+
+  const check = () => autoUpdater.checkForUpdates().catch((err) => console.log('[luyen-go] Khong kiem tra duoc cap nhat:', err && err.message));
+  setTimeout(check, UPDATE_FIRST_CHECK_MS);
+  setInterval(check, UPDATE_RECHECK_MS);
+}
+
 // Khi ứng dụng đã sẵn sàng
 app.whenReady().then(() => {
   createWindow();
+  setupAutoUpdate();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

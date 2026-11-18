@@ -99,6 +99,32 @@ Quy tắc nằm trong cơ sở dữ liệu Supabase nên không ai vượt quy�
 - Mỗi bài vẫn gắn mã người tạo (ADMIN, GV001…), hiện ở nhãn bên cạnh tên bài trong danh sách của Góc Giáo Viên.
 - **Admin làm 1 lần sau khi cập nhật:** Góc Giáo Viên → danh sách bài → bấm **"Đánh lại số thứ tự bài"**. Nút này ghi số thứ tự đang hiển thị vào tên bài trên máy chủ, dọn các số cũ gõ tay bị nhảy cóc hoặc trùng (ví dụ Lớp 3 hiện có 25 bài nhưng tên ghi số 1–24 và một bài không có số).
 
+## 7A. Tự cập nhật bản cài qua GitHub Releases (từ bản 2.1.0)
+
+Từ bản **2.1.0**, phần mềm đã cài tự kiểm tra trang
+https://github.com/videodayhoctruyenhinhtanuyen-ux/be-luyen-go-10-ngon/releases :
+
+- Mở phần mềm khoảng 10 giây (có mạng) thì phần mềm hỏi GitHub có bản mới không; máy để mở cả ngày thì 4 giờ hỏi lại một lần.
+- Có bản mới: tự tải ngầm; tải xong hiện hộp **"Có bản cập nhật mới"**:
+  - **Cập nhật ngay**: phần mềm tự tắt, cài bản mới, rồi tự mở lại (Windows có thể hỏi quyền → bấm **Yes**).
+  - **Để sau**: bản mới tự cài khi tắt phần mềm.
+- Mất mạng hoặc chưa có bản mới: phần mềm im lặng, không làm phiền.
+- **Máy đang dùng 2.0.0 hoặc 1.0.0** chưa có chức năng này → cài **2.1.0 một lần**; từ đó về sau tự cập nhật.
+
+### Cách tác giả phát hành một bản cập nhật
+
+1. Tăng số phiên bản trong `package.json` (ví dụ `"version": "2.1.0"` → `"2.1.1"`). **Bắt buộc**: số mới phải lớn hơn bản đang cài thì máy mới nhận.
+2. Dựng bản cài (xem mục 7). Thư mục kết quả có 3 tệp cần đăng:
+   - `BeLuyenGo10Ngon-Setup-2.1.1.exe`
+   - `BeLuyenGo10Ngon-Setup-2.1.1.exe.blockmap` (giúp máy chỉ tải phần thay đổi)
+   - `latest.yml` (phần mềm đọc tệp này để biết có bản mới)
+3. GitHub → Releases → **Draft a new release** → **Choose a tag**: gõ `v2.1.1` → *Create new tag* → tiêu đề → kéo **đủ 3 tệp** vào khung *Attach binaries*.
+4. **Không** tick *Set as a pre-release*; để tick **Set as the latest release** → **Publish release**.
+5. Trong vòng vài phút đến vài giờ (lần mở phần mềm tiếp theo), các máy đã cài sẽ nhận bản mới.
+
+> Thiếu `latest.yml` hoặc để bản phát hành ở dạng *Draft* / *Pre-release* thì máy đã cài **không** thấy bản mới.
+> Giao diện vẫn luôn mới nhất khi có mạng (phần mềm mở bản web); bản cập nhật qua GitHub dùng để làm mới phần chạy khi mất mạng và phần "vỏ" phần mềm.
+
 ## 7. Dựng lại bản cài (dành cho người phát triển)
 
 ```bash
@@ -110,5 +136,5 @@ Tệp cài nằm ở `release/BeLuyenGo10Ngon-Setup-<phiên bản>.exe`. Ảnh v
 Nếu báo lỗi `EPERM: operation not permitted, rename ... win-unpacked.tmp` (ổ D không cho người dùng thường đổi tên/xoá thư mục), xuất bản cài ra ổ C rồi chép tệp `.exe` về:
 
 ```bash
-npx electron-builder --win --x64 -c.directories.output=C:/Temp/luyengo-release
+npx electron-builder --win --x64 --publish never -c.directories.output=C:/Temp/luyengo-release
 ```

@@ -2,6 +2,14 @@
   "appId": "com.luyengo10ngon.app",
   "productName": "LuyenGo10Ngon",
   "copyright": "Tác giả: Nguyễn Thanh Liêm",
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "videodayhoctruyenhinhtanuyen-ux",
+      "repo": "be-luyen-go-10-ngon",
+      "releaseType": "release"
+    }
+  ],
   "directories": {
     "output": "release",
     "buildResources": "installer"
