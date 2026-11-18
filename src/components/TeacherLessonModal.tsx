@@ -1041,31 +1041,32 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const sortLessons = (lessons: Lesson[]): Lesson[] => {
     if (!Array.isArray(lessons)) return [];
     const list = [...lessons];
+    // Trong cùng khối: theo số "Bài N" hệ thống đã đánh (Bài 1, Bài 2, …); bài Numpad xếp cuối
+    const byGradeThenNumber = (a: Lesson, b: Lesson) => {
+      const gradeA = a.gradeLevel || 3;
+      const gradeB = b.gradeLevel || 3;
+      if (gradeA !== gradeB) return gradeA - gradeB;
+      const numA = displayedLessonNumber(a) ?? 100000 + (a.level || 0);
+      const numB = displayedLessonNumber(b) ?? 100000 + (b.level || 0);
+      return numA - numB;
+    };
     switch (sortBy) {
       case 'hierarchy':
-        // Hệ thống phân cấp: Lớp 3 -> Lớp 4 -> Lớp 5, bài đã giao lên đầu mỗi lớp
-        return list.sort((a, b) => {
-          const gradeA = a.gradeLevel || 3;
-          const gradeB = b.gradeLevel || 3;
-          if (gradeA !== gradeB) return gradeA - gradeB;
-          const isAssignedA = allAssignedLessonIds.has(a.id) ? 1 : 0;
-          const isAssignedB = allAssignedLessonIds.has(b.id) ? 1 : 0;
-          if (isAssignedA !== isAssignedB) return isAssignedB - isAssignedA;
-          return (a.level || 0) - (b.level || 0);
-        });
+        // Lớp 3 -> Lớp 4 -> Lớp 5, trong mỗi lớp đúng thứ tự Bài 1, Bài 2, Bài 3…
+        return list.sort(byGradeThenNumber);
       case 'assigned_first':
         return list.sort((a, b) => {
           const isAssignedA = allAssignedLessonIds.has(a.id) ? 1 : 0;
           const isAssignedB = allAssignedLessonIds.has(b.id) ? 1 : 0;
           if (isAssignedA !== isAssignedB) return isAssignedB - isAssignedA;
-          return (a.gradeLevel || 3) - (b.gradeLevel || 3);
+          return byGradeThenNumber(a, b);
         });
       case 'poems_first':
         return list.sort((a, b) => {
           const isPoemA = a.isPoemOrStory || a.category === 'poems_stories' ? 1 : 0;
           const isPoemB = b.isPoemOrStory || b.category === 'poems_stories' ? 1 : 0;
           if (isPoemA !== isPoemB) return isPoemB - isPoemA;
-          return (a.gradeLevel || 3) - (b.gradeLevel || 3);
+          return byGradeThenNumber(a, b);
         });
       case 'title_az':
         return list.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'vi'));

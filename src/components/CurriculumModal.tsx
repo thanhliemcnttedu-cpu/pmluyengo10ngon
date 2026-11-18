@@ -89,6 +89,10 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
 
   // TỰ ĐỘNG SẮP XẾP DANH SÁCH BÀI HỌC THEO THỨ TỰ TĂNG DẦN: BÀI 1, BÀI 2, BÀI 3... ĐẾN BÀI LỚN NHẤT
   const sortedLessons = [...filteredLessons].sort((a, b) => {
+    // Lớp 3 -> 4 -> 5 trước, trong mỗi lớp theo số Bài hệ thống đã đánh
+    const gradeA = a.gradeLevel || 0;
+    const gradeB = b.gradeLevel || 0;
+    if (gradeA !== gradeB) return gradeA - gradeB;
     const orderA = extractLessonOrder(a.title, a.level);
     const orderB = extractLessonOrder(b.title, b.level);
     if (orderA !== orderB) return orderA - orderB;
