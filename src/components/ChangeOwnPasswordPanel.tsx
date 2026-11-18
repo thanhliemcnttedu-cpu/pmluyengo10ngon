@@ -17,6 +17,12 @@ export const ChangeOwnPasswordPanel: React.FC<{ session: TeacherSession }> = ({ 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState('');
+  // Gõ lại thì xoá dòng báo lỗi / báo xong cũ để khỏi nhầm là lỗi của lần gõ mới
+  const edit = (setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setter(e.target.value);
+    if (error) setError('');
+    if (done) setDone('');
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,12 +62,12 @@ export const ChangeOwnPasswordPanel: React.FC<{ session: TeacherSession }> = ({ 
       </div>
       <div>
         <label className={labelCls}>Mật khẩu hiện tại</label>
-        <input type={show ? 'text' : 'password'} value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" data-testid="own-current" className={inputCls} />
+        <input type={show ? 'text' : 'password'} value={cur} onChange={edit(setCur)} required autoComplete="current-password" data-testid="own-current" className={inputCls} />
       </div>
       <div>
         <label className={labelCls}>Mật khẩu mới (ít nhất {MIN_PASSWORD_LENGTH} ký tự)</label>
         <div className="relative">
-          <input type={show ? 'text' : 'password'} value={pw1} onChange={(e) => setPw1(e.target.value)} required autoComplete="new-password" data-testid="own-new1" className={`${inputCls} pr-10`} />
+          <input type={show ? 'text' : 'password'} value={pw1} onChange={edit(setPw1)} required autoComplete="new-password" data-testid="own-new1" className={`${inputCls} pr-10`} />
           <button type="button" onClick={() => setShow((v) => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-500 cursor-pointer" title={show ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}>
             {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
           </button>
@@ -69,7 +75,7 @@ export const ChangeOwnPasswordPanel: React.FC<{ session: TeacherSession }> = ({ 
       </div>
       <div>
         <label className={labelCls}>Nhập lại mật khẩu mới</label>
-        <input type={show ? 'text' : 'password'} value={pw2} onChange={(e) => setPw2(e.target.value)} required autoComplete="new-password" data-testid="own-new2" className={inputCls} />
+        <input type={show ? 'text' : 'password'} value={pw2} onChange={edit(setPw2)} required autoComplete="new-password" data-testid="own-new2" className={inputCls} />
       </div>
       {error && <p className="text-sm text-rose-700 font-bold" data-testid="own-error">{error}</p>}
       {done && <p className="text-sm text-emerald-700 font-bold" data-testid="own-done">{done}</p>}
