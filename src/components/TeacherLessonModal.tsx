@@ -231,6 +231,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const [gradeFilter, setGradeFilter] = useState<number | 'all' | 'assigned' | 'poems'>('all');
   // Lọc thêm theo lớp khi đang xem Tất cả / Đang giao / Thơ & Văn SGK
   const [subGrade, setSubGrade] = useState<'all' | 3 | 4 | 5>('all');
+  const [onlyMine, setOnlyMine] = useState(false);
   const subGradeApplies = gradeFilter === 'all' || gradeFilter === 'assigned' || gradeFilter === 'poems';
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   const [sortBy, setSortBy] = useState<'hierarchy' | 'assigned_first' | 'poems_first' | 'title_az' | 'wpm_asc'>('hierarchy');
@@ -1119,8 +1120,25 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   };
 
   // Filter lessons in manage tab
+  // "Bài soạn của tôi": chỉ bài do tài khoản đang đăng nhập tạo (GV001…); admin: bài của quản trị
+  const isMyLesson = (l: Lesson): boolean => {
+    if (!teacherSession || !l) return false;
+    if (teacherSession.role === 'admin') return !l.ownerCode || l.ownerCode === 'ADMIN';
+    return l.ownerCode === teacherSession.code || (!!teacherSession.userId && l.ownerId === teacherSession.userId);
+  };
+  const myLessonCount = useMemo(
+    () => effectiveLessons.filter(isMyLesson).length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [effectiveLessons, teacherSession?.code, teacherSession?.userId]
+  );
+  const manageSource = useMemo(
+    () => (onlyMine ? effectiveLessons.filter(isMyLesson) : effectiveLessons),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [effectiveLessons, onlyMine, teacherSession?.code, teacherSession?.userId]
+  );
+
   const filteredManageLessons = useMemo(() => {
-    const result = effectiveLessons.filter((l) => {
+    const result = manageSource.filter((l) => {
       if (subGradeApplies && subGrade !== 'all' && l.gradeLevel !== subGrade) return false;
       if (gradeFilter === 'assigned' && !allAssignedLessonIds.has(l.id)) return false;
       if (gradeFilter === 'poems' && !(l.isPoemOrStory || l.category === 'poems_stories')) return false;
@@ -1135,21 +1153,21 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     });
 
     return sortLessons(result);
-  }, [effectiveLessons, gradeFilter, subGrade, subGradeApplies, searchKeyword, sortBy, allAssignedLessonIds]);
+  }, [manageSource, gradeFilter, subGrade, subGradeApplies, searchKeyword, sortBy, allAssignedLessonIds]);
 
   // Phân nhóm theo hệ thống phân cấp (Hierarchical Grouping)
   const groupedManageLessons = useMemo(() => {
-    const assigned = effectiveLessons.filter((l) => allAssignedLessonIds.has(l.id));
-    const grade3 = effectiveLessons.filter(
+    const assigned = manageSource.filter((l) => allAssignedLessonIds.has(l.id));
+    const grade3 = manageSource.filter(
       (l) => (l.gradeLevel === 3 || (!l.gradeLevel && (l.level || 0) <= 6)) && !allAssignedLessonIds.has(l.id)
     );
-    const grade4 = effectiveLessons.filter(
+    const grade4 = manageSource.filter(
       (l) => (l.gradeLevel === 4 || (!l.gradeLevel && (l.level || 0) > 6 && (l.level || 0) <= 10)) && !allAssignedLessonIds.has(l.id)
     );
-    const grade5 = effectiveLessons.filter(
+    const grade5 = manageSource.filter(
       (l) => (l.gradeLevel === 5 || (!l.gradeLevel && (l.level || 0) > 10)) && !allAssignedLessonIds.has(l.id)
     );
-    const others = effectiveLessons.filter(
+    const others = manageSource.filter(
       (l) => !l.gradeLevel && !allAssignedLessonIds.has(l.id) && !grade3.includes(l) && !grade4.includes(l) && !grade5.includes(l)
     );
 
@@ -1210,7 +1228,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
           ]
         : []),
     ];
-  }, [effectiveLessons, allAssignedLessonIds, searchKeyword, sortBy]);
+  }, [manageSource, allAssignedLessonIds, searchKeyword, sortBy]);
 
   // Một DÒNG bài học (gọn, đọc lướt nhanh); bấm tên bài để xem trước nội dung
   const renderLessonRow = (l: Lesson) => {
@@ -1730,6 +1748,22 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                   {/* Bộ lọc (gồm cả Thơ & Văn SGK) · tìm kiếm · sắp xếp */}
                   <div className="flex items-center gap-2 flex-wrap">
                     <div className="flex items-center gap-1 flex-wrap" role="group" aria-label="Lọc bài học">
+                      {teacherSession && (
+                        <button
+                          type="button"
+                          onClick={() => setOnlyMine((v) => !v)}
+                          aria-pressed={onlyMine}
+                          data-testid="filter-my-lessons"
+                          title={`Chỉ hiện các bài do tài khoản ${teacherSession.code} soạn, chia theo lớp và mục`}
+                          className={`h-9 px-3 rounded-full text-sm font-black transition-colors cursor-pointer mr-1 ${
+                            onlyMine
+                              ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300'
+                              : 'bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100'
+                          }`}
+                        >
+                          ✍️ Bài soạn của tôi ({myLessonCount})
+                        </button>
+                      )}
                       {[
                         { label: 'Tất cả', val: 'all' as const },
                         { label: '🎯 Đang giao', val: 'assigned' as const },
