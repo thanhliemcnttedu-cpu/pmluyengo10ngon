@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import QRCode from 'qrcode';
+import { WEB_VERSION, WEB_BUILD_TIME, getInstalledAppInfo, formatBuildTime } from '../utils/versionInfo';
 import {
   X,
   Coffee,
@@ -249,6 +250,36 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
               </p>
             </div>
           </div>
+
+          {/* THÔNG TIN PHIÊN BẢN: bản web đang chạy + bản cài trên máy (nếu mở bằng phần mềm đã cài) */}
+          {(() => {
+            const installed = getInstalledAppInfo();
+            return (
+              <div
+                className="bg-sky-50 rounded-2xl border-2 border-sky-200 px-3.5 py-2.5 text-xs sm:text-sm text-slate-800 space-y-1"
+                data-testid="version-info"
+              >
+                <p className="font-black text-sky-900 text-sm">ℹ️ Thông tin phiên bản</p>
+                {installed && (
+                  <p>
+                    <span className="font-bold">Bản cài trên máy:</span> phiên bản{' '}
+                    <strong className="text-sky-800">{installed.version || 'không rõ'}</strong>
+                    {' · '}dựng lúc <strong>{formatBuildTime(installed.buildTime)}</strong>
+                  </p>
+                )}
+                <p>
+                  <span className="font-bold">{installed ? 'Giao diện đang chạy:' : 'Phiên bản phần mềm:'}</span> phiên bản{' '}
+                  <strong className="text-sky-800">{WEB_VERSION || 'không rõ'}</strong>
+                  {' · '}cập nhật lúc <strong>{formatBuildTime(WEB_BUILD_TIME)}</strong>
+                </p>
+                {installed && (
+                  <p className="text-[11px] text-slate-500">
+                    Có mạng: phần mềm tự mở giao diện mới nhất trên mạng. Mất mạng: chạy giao diện lưu sẵn trong bản cài.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Khối Thông tin cá nhân & Đơn vị công tác */}
           <div className="bg-white rounded-2xl border-2 border-amber-200 p-3.5 shadow-2xs space-y-2.5">
