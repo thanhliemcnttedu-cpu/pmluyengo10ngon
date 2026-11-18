@@ -347,7 +347,8 @@ export default function App() {
     if (customLesson) return customLesson;
     // Chặn chỉ số vượt phạm vi (ví dụ sau khi giáo viên xóa bài)
     const safeIdx = Math.min(Math.max(0, currentLessonIndex), Math.max(0, gradeFilteredLessons.length - 1));
-    return gradeFilteredLessons[safeIdx] || allAvailableLessons[0];
+    // Không còn bài nào (đã xoá hết): dùng bài mặc định để màn hình luyện gõ không bị lỗi
+    return gradeFilteredLessons[safeIdx] || allAvailableLessons[0] || applyLessonNumbers(LESSONS)[0];
   }, [customLesson, gradeFilteredLessons, allAvailableLessons, currentLessonIndex]);
 
   // Check if current lesson is assigned homework for selected grade

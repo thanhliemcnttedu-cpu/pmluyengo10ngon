@@ -1408,8 +1408,17 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   };
   const BULK_GROUP_LABEL = { exercise: 'Luyện phím', poem: 'Thơ SGK', prose: 'Văn SGK' } as const;
 
+  // Phải còn ít nhất 1 bài: xoá hết thì học sinh không còn bài để luyện,
+  // và lần mở sau phần mềm sẽ tự nạp lại toàn bộ bài mặc định lên máy chủ.
+  const totalLessonCount = effectiveLessons.filter((l) => l && l.id).length;
+  const KEEP_ONE_MSG = 'Cần giữ lại ít nhất 1 bài học. Thầy cô bỏ chọn bớt 1 bài rồi xoá lại nhé.';
+
   const runBulkDelete = async () => {
     if (!onBulkDeleteLessons || bulkSelected.length === 0) return;
+    if (bulkSelected.length >= totalLessonCount) {
+      triggerSaveToast(KEEP_ONE_MSG);
+      return;
+    }
     const assigned = bulkSelected.filter((id) => allAssignedLessonIds.has(id)).length;
     const msg =
       `Xoá ${bulkSelected.length} bài đã chọn? Thao tác này không hoàn tác được.` +
@@ -1592,6 +1601,10 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                 type="button"
                 data-action="delete-lesson"
                 onClick={async () => {
+                  if (totalLessonCount <= 1) {
+                    triggerSaveToast(KEEP_ONE_MSG);
+                    return;
+                  }
                   if (window.confirm(`Thầy/cô có chắc muốn xoá bài "${l.title}"? Thao tác này không hoàn tác được.`)) {
                     const ok = await onDeleteLesson(l.id);
                     if (ok === false) {
