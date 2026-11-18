@@ -252,6 +252,16 @@ export async function changeOwnPassword(
 ): Promise<{ ok: boolean; error?: string }> {
   if (newPassword.length < MIN_PASSWORD_LENGTH) return { ok: false, error: `Mật khẩu mới cần ít nhất ${MIN_PASSWORD_LENGTH} ký tự.` };
   if (newPassword === currentPassword) return { ok: false, error: 'Mật khẩu mới phải khác mật khẩu hiện tại.' };
+  // Giáo viên phụ đổi qua hàm máy chủ: máy chủ kiểm tra mật khẩu cũ, đặt mật khẩu mới
+  // và ghi lại để admin xem được (bảng teacher_secrets)
+  if (session.role === 'teacher') {
+    const r = await callTeacherAdmin<{ ok: boolean }>({
+      action: 'change_own_password',
+      currentPassword: currentPassword.trim(),
+      newPassword,
+    });
+    return r.ok ? { ok: true } : { ok: false, error: r.error };
+  }
   const email = session.role === 'admin' ? ADMIN_EMAIL : teacherEmail(session.username);
   if (!email) {
     return { ok: false, error: 'Chưa cấu hình Gmail tác giả (VITE_ADMIN_EMAIL) nên chưa đổi được mật khẩu admin trên máy chủ.' };
@@ -278,6 +288,10 @@ export interface TeacherAccount {
   displayName: string;
   createdAt?: string;
   lessonCount: number;
+  /** Mật khẩu đọc được do máy chủ lưu (null: tài khoản tạo trước khi có chức năng này) */
+  password?: string | null;
+  /** Ai đặt mật khẩu gần nhất: 'admin' hoặc 'teacher' */
+  passwordSetBy?: string | null;
 }
 
 type AdminCall<T> = { ok: true; data: T } | { ok: false; error: string };

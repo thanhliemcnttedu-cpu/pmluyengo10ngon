@@ -222,6 +222,9 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
 
   // Bộ lọc & sắp xếp phân cấp ở tab 'manage'
   const [gradeFilter, setGradeFilter] = useState<number | 'all' | 'assigned' | 'poems'>('all');
+  // Lọc thêm theo lớp khi đang xem Tất cả / Đang giao / Thơ & Văn SGK
+  const [subGrade, setSubGrade] = useState<'all' | 3 | 4 | 5>('all');
+  const subGradeApplies = gradeFilter === 'all' || gradeFilter === 'assigned' || gradeFilter === 'poems';
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   const [sortBy, setSortBy] = useState<'hierarchy' | 'assigned_first' | 'poems_first' | 'title_az' | 'wpm_asc'>('hierarchy');
 
@@ -1080,13 +1083,10 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   // Filter lessons in manage tab
   const filteredManageLessons = useMemo(() => {
     const result = effectiveLessons.filter((l) => {
-      if (gradeFilter === 'assigned') {
-        return allAssignedLessonIds.has(l.id);
-      }
-      if (gradeFilter === 'poems') {
-        return l.isPoemOrStory || l.category === 'poems_stories';
-      }
-      if (gradeFilter !== 'all' && l.gradeLevel !== gradeFilter) return false;
+      if (subGradeApplies && subGrade !== 'all' && l.gradeLevel !== subGrade) return false;
+      if (gradeFilter === 'assigned' && !allAssignedLessonIds.has(l.id)) return false;
+      if (gradeFilter === 'poems' && !(l.isPoemOrStory || l.category === 'poems_stories')) return false;
+      if (typeof gradeFilter === 'number' && l.gradeLevel !== gradeFilter) return false;
       if (searchKeyword.trim()) {
         const kw = searchKeyword.toLowerCase();
         const inTitle = (l.title || '').toLowerCase().includes(kw);
@@ -1097,7 +1097,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     });
 
     return sortLessons(result);
-  }, [effectiveLessons, gradeFilter, searchKeyword, sortBy, allAssignedLessonIds]);
+  }, [effectiveLessons, gradeFilter, subGrade, subGradeApplies, searchKeyword, sortBy, allAssignedLessonIds]);
 
   // Phân nhóm theo hệ thống phân cấp (Hierarchical Grouping)
   const groupedManageLessons = useMemo(() => {
@@ -1642,6 +1642,16 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
               {/* ========================================================================= */}
               {activeTab === 'manage' && (
                 <div className="space-y-3">
+                  {/* Mã để học sinh tìm bài: Chọn bài → "Chọn bài theo mã cô giáo" */}
+                  {teacherSession && (
+                    <div className="flex items-center gap-2 flex-wrap px-3 py-2 rounded-2xl bg-amber-50 border border-amber-200 text-sm" data-testid="my-teacher-code">
+                      <span className="font-bold text-amber-900">Mã để học sinh tìm bài của {teacherSession.role === 'admin' ? 'quản trị' : 'thầy cô'}:</span>
+                      <span className="px-2.5 py-0.5 rounded-lg bg-amber-500 text-slate-950 font-black tracking-wide">{teacherSession.code}</span>
+                      <span className="text-xs text-slate-600 font-semibold">
+                        Học sinh bấm <b>Chọn bài</b>, gõ mã này vào ô "Chọn bài theo mã cô giáo" rồi Enter.
+                      </span>
+                    </div>
+                  )}
                   {/* Tiêu đề mục + nút chính duy nhất */}
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <h3 className="text-lg font-black text-slate-900">Bài học <span className="text-slate-400 font-bold">({filteredManageLessons.length})</span></h3>
@@ -1704,6 +1714,30 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                           {item.label}
                         </button>
                       ))}
+                      {/* Lọc theo lớp cho các mục gộp nhiều lớp (Tất cả, Đang giao, Thơ & Văn SGK) */}
+                      {subGradeApplies && (
+                        <div className="flex items-center gap-1 pl-2 ml-1 border-l-2 border-slate-200" role="group" aria-label="Lọc theo lớp" data-testid="manage-subgrade">
+                          <span className="text-xs font-bold text-slate-500 pr-0.5">Lọc lớp:</span>
+                          {([
+                            { label: 'Mọi lớp', val: 'all' as const },
+                            { label: '3', val: 3 as const },
+                            { label: '4', val: 4 as const },
+                            { label: '5', val: 5 as const },
+                          ]).map((g) => (
+                            <button
+                              key={String(g.val)}
+                              type="button"
+                              onClick={() => setSubGrade(g.val)}
+                              aria-pressed={subGrade === g.val}
+                              className={`h-8 min-w-[36px] px-2.5 rounded-full text-xs font-black cursor-pointer transition-colors ${
+                                subGrade === g.val ? 'bg-sky-600 text-white' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              {g.val === 'all' ? g.label : `Lớp ${g.label}`}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 ml-auto flex-wrap">
                       <label className="h-9 flex items-center gap-1.5 bg-white px-3 rounded-full border border-slate-300 w-48 sm:w-60">
@@ -1742,7 +1776,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                       <span>Trạng thái</span>
                       <span className="text-right pr-1">Thao tác</span>
                     </div>
-                    {gradeFilter === 'all' && sortBy === 'hierarchy' && !searchKeyword.trim() ? (
+                    {gradeFilter === 'all' && subGrade === 'all' && sortBy === 'hierarchy' && !searchKeyword.trim() ? (
                       groupedManageLessons.map((group) =>
                         !group || group.lessons.length === 0 ? null : (
                           <section key={group.id} aria-label={group.badge}>

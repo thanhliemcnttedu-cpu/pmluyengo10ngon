@@ -48,6 +48,11 @@ export const ChangeOwnPasswordPanel: React.FC<{ session: TeacherSession }> = ({ 
         <p className="text-sm text-slate-600">
           Tài khoản: <b>{session.code}</b> – {session.displayName} (tên đăng nhập <b>{session.username}</b>). Cần có mạng Internet.
         </p>
+        {session.role === 'teacher' && (
+          <p className="mt-1 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1" data-testid="own-password-notice">
+            Lưu ý: quản trị (admin) xem được mật khẩu mới để hỗ trợ khi thầy cô quên mật khẩu.
+          </p>
+        )}
       </div>
       <div>
         <label className={labelCls}>Mật khẩu hiện tại</label>

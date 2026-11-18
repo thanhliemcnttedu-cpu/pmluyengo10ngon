@@ -8,6 +8,8 @@
 //   create  { username, displayName, password }
 //   delete  { userId }                     -> xoá tài khoản (bài đã tạo vẫn giữ, chuyển cho admin quản lý)
 //   set_password { userId, password }      -> admin đặt lại mật khẩu cho giáo viên
+//   change_own_password { currentPassword, newPassword } -> GIÁO VIÊN tự đổi mật khẩu của mình
+// Mật khẩu đọc được lưu ở bảng teacher_secrets (chỉ hàm này đọc/ghi, chỉ trả cho admin)
 // ============================================================================
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
@@ -43,10 +45,9 @@ Deno.serve(async (req) => {
   const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
   const { data: callerProfile } = await admin
     .from('teacher_profiles')
-    .select('role')
+    .select('role, username')
     .eq('user_id', caller.id)
     .maybeSingle();
-  if (callerProfile?.role !== 'admin') return json(403, { error: 'Chỉ tài khoản quản trị (admin) được quản lý giáo viên.' });
 
   let body: Record<string, unknown> = {};
   try {
@@ -55,6 +56,31 @@ Deno.serve(async (req) => {
     return json(400, { error: 'Dữ liệu gửi lên không hợp lệ' });
   }
   const action = String(body.action || '');
+
+  // Ghi mật khẩu đọc được (để admin xem / xuất Excel). Lỗi ghi không làm hỏng thao tác chính.
+  const saveSecret = async (userId: string, password: string, by: 'admin' | 'teacher') => {
+    await admin
+      .from('teacher_secrets')
+      .upsert({ user_id: userId, shown_password: password, updated_at: new Date().toISOString(), updated_by: by });
+  };
+
+  // Giáo viên phụ tự đổi mật khẩu: kiểm tra mật khẩu hiện tại rồi đặt mật khẩu mới
+  if (action === 'change_own_password') {
+    if (callerProfile?.role !== 'teacher') return json(403, { error: 'Chỉ tài khoản giáo viên phụ dùng chức năng này.' });
+    const currentPassword = String(body.currentPassword || '');
+    const newPassword = String(body.newPassword || '');
+    if (newPassword.length < MIN_PASSWORD) return json(400, { error: `Mật khẩu mới cần ít nhất ${MIN_PASSWORD} ký tự.` });
+    if (newPassword === currentPassword) return json(400, { error: 'Mật khẩu mới phải khác mật khẩu hiện tại.' });
+    const checker = createClient(url, anonKey, { auth: { persistSession: false } });
+    const { error: sErr } = await checker.auth.signInWithPassword({ email: caller.email || '', password: currentPassword });
+    if (sErr) return json(400, { error: 'Mật khẩu hiện tại không đúng.' });
+    const { error: uErr } = await admin.auth.admin.updateUserById(caller.id, { password: newPassword });
+    if (uErr) return json(400, { error: 'Không đổi được mật khẩu: ' + uErr.message });
+    await saveSecret(caller.id, newPassword, 'teacher');
+    return json(200, { ok: true });
+  }
+
+  if (callerProfile?.role !== 'admin') return json(403, { error: 'Chỉ tài khoản quản trị (admin) được quản lý giáo viên.' });
 
   // Chỉ thao tác trên tài khoản GIÁO VIÊN PHỤ (không cho xoá/đổi mật khẩu admin qua đây)
   const loadTeacher = async (userId: string) => {
@@ -70,6 +96,9 @@ Deno.serve(async (req) => {
         .eq('role', 'teacher')
         .order('teacher_code');
       if (error) throw error;
+      const { data: secrets } = await admin.from('teacher_secrets').select('user_id, shown_password, updated_by');
+      const secretOf: Record<string, { shown_password: string | null; updated_by: string | null }> = {};
+      (secrets || []).forEach((s: { user_id: string; shown_password: string | null; updated_by: string | null }) => (secretOf[s.user_id] = s));
       const { data: owned } = await admin.from('lessons').select('owner_id').not('owner_id', 'is', null);
       const counts: Record<string, number> = {};
       (owned || []).forEach((r: { owner_id: string }) => (counts[r.owner_id] = (counts[r.owner_id] || 0) + 1));
@@ -81,6 +110,8 @@ Deno.serve(async (req) => {
           displayName: p.display_name,
           createdAt: p.created_at,
           lessonCount: counts[p.user_id] || 0,
+          password: secretOf[p.user_id]?.shown_password ?? null,
+          passwordSetBy: secretOf[p.user_id]?.updated_by ?? null,
         })),
       });
     }
@@ -122,7 +153,8 @@ Deno.serve(async (req) => {
         await admin.auth.admin.deleteUser(created.user.id);
         throw pErr;
       }
-      return json(200, { teacher: { userId: created.user.id, code, username, displayName, lessonCount: 0 } });
+      await saveSecret(created.user.id, password, 'admin');
+      return json(200, { teacher: { userId: created.user.id, code, username, displayName, lessonCount: 0, password, passwordSetBy: 'admin' } });
     }
 
     if (action === 'delete') {
@@ -142,6 +174,7 @@ Deno.serve(async (req) => {
       if (!t) return json(404, { error: 'Không tìm thấy giáo viên phụ này.' });
       const { error } = await admin.auth.admin.updateUserById(userId, { password });
       if (error) throw error;
+      await saveSecret(userId, password, 'admin');
       return json(200, { ok: true });
     }
 

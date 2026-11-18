@@ -1,7 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { Lesson } from '../types/typing';
 import { LESSONS } from '../data/lessons';
-import { X, CheckCircle2, Star, Sparkles, BookOpen, UserCheck, Image as ImageIcon, GraduationCap, Feather } from 'lucide-react';
+import { X, CheckCircle2, Star, Sparkles, BookOpen, UserCheck, Image as ImageIcon, GraduationCap, Feather, Search } from 'lucide-react';
+
+const TEACHER_CODE_KEY = 'typing_kids_teacher_code_filter_v1';
+
+/** Chuẩn hoá mã cô giáo học sinh gõ: "gv1", "GV001", "1", "001" -> "GV001"; "admin" -> "ADMIN" */
+export function normalizeTeacherCode(raw: string): string {
+  const t = (raw || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (!t) return '';
+  if (t === 'ADMIN' || t === 'QUANTRI') return 'ADMIN';
+  const m = t.match(/^(?:GV)?-?0*(\d{1,6})$/);
+  if (m) return 'GV' + m[1].padStart(3, '0');
+  return t;
+}
+
+/** Bài có thuộc mã cô giáo này không (bài cũ chưa ghi người tạo được tính là của quản trị) */
+const lessonOfCode = (l: Lesson, code: string) =>
+  code === 'ADMIN' ? !l.ownerCode || l.ownerCode === 'ADMIN' : (l.ownerCode || '').toUpperCase() === code;
 
 interface CurriculumModalProps {
   isOpen: boolean;
@@ -49,6 +65,19 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
   onOpenTeacherModal,
   initialGradeFilter,
 }) => {
+  // Lọc thêm theo lớp cho các mục gộp nhiều lớp (Tất cả, Thơ & Văn SGK, Numpad, Bài cô giáo)
+  const [subGrade, setSubGrade] = useState<'all' | 3 | 4 | 5>('all');
+  // Tìm bài theo mã cô giáo: học sinh gõ mã (vd GV001) rồi Enter -> chỉ còn bài của cô đó.
+  // Nhớ mã trên máy này để lần sau mở ra là thấy ngay bài của cô.
+  const [codeInput, setCodeInput] = useState('');
+  const [teacherCode, setTeacherCode] = useState<string>(() => {
+    try {
+      return localStorage.getItem(TEACHER_CODE_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [codeError, setCodeError] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | '3' | '4' | '5' | 'poems' | 'numpad' | 'teacher'>(
     initialGradeFilter ? String(initialGradeFilter) as any : 'all'
   );
@@ -72,11 +101,49 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
 
   if (!isOpen) return null;
 
-  const effectiveLessons = allLessons && allLessons.length > 0 ? allLessons : [...teacherLessons, ...LESSONS];
+  const allEffective = allLessons && allLessons.length > 0 ? allLessons : [...teacherLessons, ...LESSONS];
+  const effectiveLessons = teacherCode ? allEffective.filter((l) => l && lessonOfCode(l, teacherCode)) : allEffective;
+  // Tên cô giáo của mã đang lọc (lấy từ tên người soạn bài)
+  const codeTeacherName = teacherCode
+    ? effectiveLessons.find((l) => l.authorTeacher)?.authorTeacher || (teacherCode === 'ADMIN' ? 'Quản trị' : '')
+    : '';
+
+  const applyCode = () => {
+    const code = normalizeTeacherCode(codeInput);
+    if (!code) {
+      setCodeError('Em hãy gõ mã của cô giáo, ví dụ GV001.');
+      return;
+    }
+    if (!allEffective.some((l) => l && lessonOfCode(l, code))) {
+      setCodeError(`Chưa có bài nào của mã ${code}. Em kiểm tra lại mã cô giáo đã cho nhé.`);
+      return;
+    }
+    setCodeError('');
+    setTeacherCode(code);
+    setCodeInput('');
+    setFilterTab('all');
+    setSubGrade('all');
+    try {
+      localStorage.setItem(TEACHER_CODE_KEY, code);
+    } catch {
+      // Bỏ qua khi bộ nhớ trang bị chặn
+    }
+  };
+  const clearCode = () => {
+    setTeacherCode('');
+    setCodeError('');
+    try {
+      localStorage.removeItem(TEACHER_CODE_KEY);
+    } catch {
+      // Bỏ qua
+    }
+  };
 
   // Filter lessons based on active tab
+  const subGradeApplies = filterTab === 'all' || filterTab === 'poems' || filterTab === 'numpad' || filterTab === 'teacher';
   const filteredLessons = effectiveLessons.filter((l) => {
     if (!l) return false;
+    if (subGradeApplies && subGrade !== 'all' && l.gradeLevel !== subGrade) return false;
     if (filterTab === 'all') return true;
     if (filterTab === 'teacher') return l.id?.startsWith('teacher-') || !!l.authorTeacher;
     if (filterTab === 'poems') return !!l.isPoemOrStory || l.category === 'poems_stories';
@@ -124,6 +191,64 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
           >
             <X className="w-5 h-5" />
           </button>
+        </div>
+
+        {/* TÌM BÀI THEO MÃ CÔ GIÁO */}
+        <div className="px-3 pt-3 pb-2 bg-amber-50/70 border-b border-amber-100" data-testid="teacher-code-filter">
+          {teacherCode ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="px-3 py-1.5 rounded-full bg-amber-500 text-slate-950 text-sm font-black" data-testid="teacher-code-active">
+                🔎 Bài của {codeTeacherName ? `${codeTeacherName} · ` : ''}mã {teacherCode}
+              </span>
+              <span className="text-xs font-bold text-slate-600">{effectiveLessons.length} bài · chọn lớp, mục ở các nút bên dưới</span>
+              <button
+                type="button"
+                onClick={clearCode}
+                className="ml-auto min-h-[36px] px-3 rounded-full bg-white border-2 border-slate-300 text-slate-700 text-xs font-black hover:bg-slate-50 cursor-pointer"
+              >
+                Xem tất cả bài
+              </button>
+            </div>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                applyCode();
+              }}
+              className="flex items-center gap-2 flex-wrap"
+            >
+              <label htmlFor="teacher-code-input" className="text-sm font-black text-amber-900 flex items-center gap-1">
+                <Search className="w-4 h-4" /> Chọn bài theo mã cô giáo:
+              </label>
+              <input
+                id="teacher-code-input"
+                data-testid="teacher-code-input"
+                value={codeInput}
+                onChange={(e) => {
+                  setCodeInput(e.target.value);
+                  if (codeError) setCodeError('');
+                }}
+                // Phím gõ trong ô này không được tính là gõ bài
+                onKeyDown={(e) => e.stopPropagation()}
+                placeholder="vd: GV001"
+                autoComplete="off"
+                className="w-36 min-h-[38px] px-3 rounded-full bg-white border-2 border-amber-300 text-sm font-black uppercase tracking-wide focus:outline-none focus:border-amber-500"
+              />
+              <button
+                type="submit"
+                data-testid="teacher-code-submit"
+                className="min-h-[38px] px-4 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-black cursor-pointer"
+              >
+                Tìm bài
+              </button>
+              <span className="text-[11px] text-slate-500 font-semibold">Gõ mã cô giáo cho rồi bấm Enter</span>
+            </form>
+          )}
+          {codeError && (
+            <p className="mt-1.5 text-xs font-bold text-rose-700" data-testid="teacher-code-error">
+              {codeError}
+            </p>
+          )}
         </div>
 
         {/* Grade Filter Navigation Tabs */}
@@ -232,6 +357,31 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
             </button>
           )}
         </div>
+
+        {subGradeApplies && (
+          <div className="flex items-center gap-1.5 px-3 py-2 bg-white border-b border-sky-100 flex-wrap" role="group" aria-label="Lọc theo lớp" data-testid="curriculum-subgrade">
+            <span className="text-xs font-black text-slate-600 pr-1">Lọc theo lớp:</span>
+            {([
+              { label: 'Mọi lớp', val: 'all' as const },
+              { label: 'Lớp 3', val: 3 as const },
+              { label: 'Lớp 4', val: 4 as const },
+              { label: 'Lớp 5', val: 5 as const },
+            ]).map((g) => (
+              <button
+                key={String(g.val)}
+                type="button"
+                onClick={() => setSubGrade(g.val)}
+                aria-pressed={subGrade === g.val}
+                className={`min-h-[32px] px-3 rounded-full text-xs font-black cursor-pointer transition-colors ${
+                  subGrade === g.val ? 'bg-sky-600 text-white shadow' : 'bg-sky-50 text-sky-900 border border-sky-200 hover:bg-sky-100'
+                }`}
+              >
+                {g.label}
+              </button>
+            ))}
+            <span className="text-[11px] text-slate-500 font-semibold ml-1">({sortedLessons.length} bài)</span>
+          </div>
+        )}
 
         {/* Content list - Sắp xếp tự động tăng dần từ trái qua phải */}
         <div className="p-3 sm:p-5 overflow-y-auto space-y-3 flex-1 bg-sky-50/20 custom-scrollbar">

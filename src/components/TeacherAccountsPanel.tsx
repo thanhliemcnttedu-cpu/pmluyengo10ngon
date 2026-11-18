@@ -3,7 +3,8 @@
 // Mọi thao tác chạy qua hàm máy chủ quan-ly-giao-vien (máy chủ kiểm tra người gọi là admin).
 // ============================================================================
 import React, { useCallback, useEffect, useState } from 'react';
-import { UserPlus, KeyRound, Trash2, RefreshCw, Eye, EyeOff, Users } from 'lucide-react';
+import { UserPlus, KeyRound, Trash2, RefreshCw, Eye, EyeOff, Users, FileSpreadsheet, Copy } from 'lucide-react';
+import { downloadXlsx } from '../utils/simpleXlsx';
 import {
   listTeachers,
   createTeacher,
@@ -35,6 +36,9 @@ export const TeacherAccountsPanel: React.FC<Props> = ({ offline }) => {
   const [creating, setCreating] = useState(false);
 
   const [resetFor, setResetFor] = useState<string | null>(null);
+  // Hiện mật khẩu: theo từng dòng, hoặc hiện tất cả
+  const [showAllPw, setShowAllPw] = useState(false);
+  const [shownPw, setShownPw] = useState<Record<string, boolean>>({});
   const [resetPw, setResetPw] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -82,6 +86,39 @@ export const TeacherAccountsPanel: React.FC<Props> = ({ offline }) => {
     setNotice(`Đã đặt mật khẩu mới cho ${t.code} – ${t.displayName}.`);
     setResetFor(null);
     setResetPw('');
+    reload();
+  };
+
+  const copyText = async (text: string, what: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice(`Đã chép ${what}.`);
+    } catch {
+      setError('Trình duyệt không cho chép tự động. Hãy bôi đen rồi bấm Ctrl+C.');
+    }
+  };
+
+  // Xuất danh sách tài khoản + mật khẩu ra tệp Excel (.xlsx) để in / gửi giáo viên
+  const onExport = () => {
+    const today = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stamp = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+    const rows: string[][] = [
+      ['STT', 'Mã giáo viên', 'Họ tên', 'Tên đăng nhập', 'Mật khẩu', 'Người đặt mật khẩu', 'Số bài đã tạo', 'Ngày tạo tài khoản', 'Địa chỉ đăng nhập'],
+      ...teachers.map((t, i) => [
+        String(i + 1),
+        t.code,
+        t.displayName,
+        t.username,
+        t.password ?? '(chưa lưu – bấm Đổi mật khẩu để đặt lại)',
+        t.passwordSetBy === 'teacher' ? 'Giáo viên tự đổi' : t.passwordSetBy === 'admin' ? 'Quản trị' : '',
+        String(t.lessonCount),
+        t.createdAt ? new Date(t.createdAt).toLocaleDateString('vi-VN') : '',
+        typeof window !== 'undefined' && /^https?:/.test(window.location.origin) ? window.location.origin : 'https://luyengo10ngon.vercel.app',
+      ]),
+    ];
+    downloadXlsx(`tai-khoan-giao-vien-${stamp}.xlsx`, rows, 'Tài khoản giáo viên', [6, 14, 28, 18, 20, 18, 12, 18, 34]);
+    setNotice(`Đã xuất ${teachers.length} tài khoản ra tệp Excel tai-khoan-giao-vien-${stamp}.xlsx (thư mục Tải xuống). Hãy cất giữ cẩn thận vì tệp có mật khẩu.`);
   };
 
   const onDelete = async (t: TeacherAccount) => {
@@ -123,14 +160,34 @@ export const TeacherAccountsPanel: React.FC<Props> = ({ offline }) => {
             Giáo viên phụ được thêm bài và sửa/xoá bài của chính mình; không giao bài cho lớp, không xoá bài của người khác.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={reload}
-          disabled={loading}
-          className="min-h-[44px] px-4 rounded-full bg-white border-2 border-slate-300 text-slate-700 font-bold text-sm flex items-center gap-2 cursor-pointer hover:bg-slate-50 disabled:opacity-60"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Tải lại
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setShowAllPw((v) => !v)}
+            disabled={teachers.length === 0}
+            data-testid="toggle-all-passwords"
+            className="min-h-[44px] px-4 rounded-full bg-white border-2 border-slate-300 text-slate-700 font-bold text-sm flex items-center gap-2 cursor-pointer hover:bg-slate-50 disabled:opacity-60"
+          >
+            {showAllPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />} {showAllPw ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+          </button>
+          <button
+            type="button"
+            onClick={onExport}
+            disabled={teachers.length === 0}
+            data-testid="export-teachers-xlsx"
+            className="min-h-[44px] px-4 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm flex items-center gap-2 cursor-pointer disabled:opacity-60"
+          >
+            <FileSpreadsheet className="w-4 h-4" /> Xuất Excel
+          </button>
+          <button
+            type="button"
+            onClick={reload}
+            disabled={loading}
+            className="min-h-[44px] px-4 rounded-full bg-white border-2 border-slate-300 text-slate-700 font-bold text-sm flex items-center gap-2 cursor-pointer hover:bg-slate-50 disabled:opacity-60"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Tải lại
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -217,6 +274,40 @@ export const TeacherAccountsPanel: React.FC<Props> = ({ offline }) => {
                     <p className="text-xs text-slate-500">
                       Tên đăng nhập: <b>{t.username}</b> · {t.lessonCount} bài đã tạo
                     </p>
+                  </div>
+                  {/* Cột mật khẩu: ẩn mặc định, bấm con mắt để hiện */}
+                  <div className="flex items-center gap-1 min-w-[230px]" data-teacher-password={t.code}>
+                    <span className="text-xs font-bold text-slate-500">Mật khẩu:</span>
+                    {t.password ? (
+                      <>
+                        <code className="px-2 py-1 rounded-lg bg-slate-100 text-sm font-bold text-slate-900 select-all" data-testid="teacher-password-value">
+                          {showAllPw || shownPw[t.userId] ? t.password : '••••••••'}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => setShownPw((m) => ({ ...m, [t.userId]: !m[t.userId] }))}
+                          className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 cursor-pointer"
+                          title={showAllPw || shownPw[t.userId] ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                        >
+                          {showAllPw || shownPw[t.userId] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => copyText(`Tên đăng nhập: ${t.username}\nMật khẩu: ${t.password}`, `tài khoản ${t.code}`)}
+                          className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 cursor-pointer"
+                          title="Chép tên đăng nhập và mật khẩu"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                        {t.passwordSetBy === 'teacher' && (
+                          <span className="text-[10px] font-bold text-amber-700">GV tự đổi</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-xs font-semibold text-amber-700" title="Tài khoản tạo trước khi có chức năng lưu mật khẩu">
+                        Chưa lưu – bấm Đổi mật khẩu để đặt lại
+                      </span>
+                    )}
                   </div>
                   <button
                     type="button"
