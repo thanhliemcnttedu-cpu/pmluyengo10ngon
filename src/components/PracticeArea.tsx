@@ -45,6 +45,8 @@ interface PracticeAreaProps {
   onRestart: () => void;
   /** Có khi đang gõ: nút Tạm dừng / Tiếp tục và Kết thúc bài sớm */
   typingControl?: { paused: boolean; onPause: () => void; onResume: () => void; onFinish: () => void };
+  /** Nút "Bài tiếp theo": bài kế tiếp cùng nhóm, cùng khối lớp (title null = đã là bài cuối của nhóm) */
+  nextInGroup?: { title: string | null; onNext: () => void };
   onNextLesson: () => void;
   onPrevLesson: () => void;
   hasPrevLesson: boolean;
@@ -127,6 +129,7 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
   mistakeChar,
   onRestart,
   typingControl,
+  nextInGroup,
   onNextLesson,
   onPrevLesson,
   hasPrevLesson,
@@ -632,6 +635,20 @@ export const PracticeArea: React.FC<PracticeAreaProps> = ({
                 <span>Kết thúc</span>
               </button>
             </>
+          )}
+
+          {nextInGroup && (
+            <button
+              type="button"
+              onClick={nextInGroup.onNext}
+              disabled={!nextInGroup.title}
+              className="min-h-[36px] px-3 rounded-xl font-black text-[15px] flex items-center gap-1 shadow-sm transition-all cursor-pointer active:scale-95 border-2 bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
+              title={nextInGroup.title ? `Sang bài kế tiếp cùng nhóm: ${nextInGroup.title}` : 'Đã là bài cuối của nhóm'}
+              data-testid="next-in-group"
+            >
+              <span>Bài tiếp theo</span>
+              <span aria-hidden="true">▶</span>
+            </button>
           )}
 
           {/* Cụm điều khiển mini */}

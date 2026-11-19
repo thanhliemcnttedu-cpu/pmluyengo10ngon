@@ -45,6 +45,7 @@ import {
   lessonSortKeys,
   moveLessonToPosition,
   lessonGroupOf,
+  numberingSetKey,
   lessonOwnerKey,
   isSystemLesson,
 } from './utils/lessonNumbering';
@@ -292,7 +293,7 @@ export default function App() {
   }, [allAvailableLessons]);
 
   // Grade Assignments (Bài tập được giáo viên giao cho từng khối lớp - 1 hoặc nhiều bài)
-  const [gradeAssignments, setGradeAssignments] = useState<Record<number, GradeAssignment>>(() => {
+  const [rawGradeAssignments, setGradeAssignments] = useState<Record<number, GradeAssignment>>(() => {
     try {
       const saved = localStorage.getItem('typing_kids_grade_assignments');
       if (saved) {
@@ -313,6 +314,22 @@ export default function App() {
       },
     };
   });
+  // Bài giao của khối nào chỉ gồm bài của khối đó: bỏ bài thuộc khối khác (dữ liệu giao cũ có thể bị lẫn).
+  // Bài chưa tải xong (chưa biết khối) thì tạm giữ, các danh sách hiển thị đã tự bỏ bài không tìm thấy.
+  const gradeAssignments = useMemo(() => {
+    const gradeOf = new Map(allAvailableLessons.map((l) => [l.id, l.gradeLevel]));
+    const out: Record<number, GradeAssignment> = {};
+    Object.entries(rawGradeAssignments || {}).forEach(([k, a]) => {
+      const g = Number(k);
+      if (!a) return;
+      const ids = (Array.isArray(a.lessonIds) && a.lessonIds.length > 0 ? a.lessonIds : a.lessonId ? [a.lessonId] : []).filter(
+        (id) => id && (!gradeOf.has(id) || gradeOf.get(id) === g)
+      );
+      if (ids.length === 0) return;
+      out[g] = { ...a, lessonIds: ids, lessonId: ids[0] };
+    });
+    return out;
+  }, [rawGradeAssignments, allAvailableLessons]);
 
   // Lọc và sắp xếp tự động các bài học của khối lớp theo đúng tiến trình chuẩn (Bài 1, Bài 2, Bài 3, Bài 4...)
   // HỌC SINH: mặc định chỉ thấy bài hệ thống (quản trị). Bài của giáo viên phụ chỉ hiện khi gõ mã cô giáo
@@ -2255,6 +2272,20 @@ export default function App() {
     }
   };
 
+  // BÀI TIẾP THEO TRONG NHÓM: cùng khối lớp + cùng nhóm (Luyện phím / Thơ / Văn / Numpad) + cùng bộ bài
+  // (bài hệ thống, hoặc bài của đúng thầy cô đó). Ví dụ Lớp 3 · Luyện phím · Bài 1 -> Bài 2.
+  const nextInGroup = useMemo<Lesson | null>(() => {
+    const cur = allAvailableLessons.find((l) => l.id === activeLesson.id) ?? activeLesson;
+    const key = numberingSetKey(cur);
+    const group = sortLessonsLogically(allAvailableLessons.filter((l) => l && numberingSetKey(l) === key));
+    const i = group.findIndex((l) => l.id === cur.id);
+    return i >= 0 && i < group.length - 1 ? group[i + 1] : null;
+  }, [allAvailableLessons, activeLesson]);
+  const handleNextInGroup = () => {
+    if (!nextInGroup) return;
+    setCustomLesson(nextInGroup);
+  };
+
   const handleNextLesson = () => {
     if (hasNext) {
       setCustomLesson(null);
@@ -2774,6 +2805,10 @@ export default function App() {
                     ? { paused: isPaused, onPause: pauseTyping, onResume: resumeTyping, onFinish: handleFinishEarly }
                     : undefined
                 }
+                nextInGroup={{
+                  title: nextInGroup ? nextInGroup.title : null,
+                  onNext: handleNextInGroup,
+                }}
                 onRestart={handleRestart}
                 onNextLesson={handleNextLesson}
                 onPrevLesson={handlePrevLesson}

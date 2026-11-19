@@ -481,9 +481,10 @@ export const CurriculumModal: React.FC<CurriculumModalProps> = ({
                 .map((g) => ({
                   g,
                   a: codeAssignments[g],
+                  // Chỉ bài đúng khối g (bài giao không lẫn sang khối khác)
                   items: (codeAssignments[g]?.lessonIds || [])
                     .map((id) => allEffective.find((l) => l && l.id === id))
-                    .filter((l): l is Lesson => !!l),
+                    .filter((l): l is Lesson => !!l && l.gradeLevel === g),
                 }))
                 .filter((b) => b.items.length > 0);
               if (blocks.length === 0) return null;
