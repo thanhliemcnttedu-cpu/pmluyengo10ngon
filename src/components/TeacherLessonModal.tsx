@@ -1276,7 +1276,12 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
           return byGradeThenNumber(a, b);
         });
       case 'title_az':
-        return list.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'vi'));
+        // So số theo giá trị (numeric): "Bài 2" < "Bài 9" < "Bài 10", không xếp kiểu chữ "Bài 10" < "Bài 2"
+        return list.sort(
+          (a, b) =>
+            (a.title || '').localeCompare(b.title || '', 'vi', { numeric: true, sensitivity: 'base' }) ||
+            (a.gradeLevel || 0) - (b.gradeLevel || 0)
+        );
       case 'wpm_asc':
         return list.sort((a, b) => (a.targetWpm || 0) - (b.targetWpm || 0));
       default:

@@ -16,7 +16,8 @@ const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 const version = pkg.version;
 
 let when = new Date();
-try {
+// --dong (commit bản web): ghi giờ đẩy lên thực tế; ghi chú bộ cài: lấy giờ dựng bộ cài
+if (!process.argv.includes('--dong')) try {
   const info = JSON.parse(fs.readFileSync(path.join(root, 'electron', 'build-info.json'), 'utf8'));
   if (info.version === version && info.buildTime) when = new Date(info.buildTime);
 } catch {
