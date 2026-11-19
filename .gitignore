@@ -15,3 +15,4 @@ release/
 build-desktop/
 # Phiên bản + thời điểm dựng bộ cài, sinh ra mỗi lần dựng
 electron/build-info.json
+installer/build-info.nsh

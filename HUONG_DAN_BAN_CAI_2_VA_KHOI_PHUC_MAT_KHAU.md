@@ -127,6 +127,7 @@ https://github.com/videodayhoctruyenhinhtanuyen-ux/be-luyen-go-10-ngon/releases 
    - `BeLuyenGo10Ngon-Setup-2.1.1.exe.blockmap` (giúp máy chỉ tải phần thay đổi)
    - `latest.yml` (phần mềm đọc tệp này để biết có bản mới)
 3. GitHub → Releases → **Draft a new release** → **Choose a tag**: gõ `v2.1.1` → *Create new tag* → tiêu đề → kéo **đủ 3 tệp** vào khung *Attach binaries*.
+   - Ô mô tả: dán nội dung tệp `release/v2.1.1/GHI_CHU_PHAT_HANH.md`. Lệnh dựng bộ cài tự ghi vào đầu tệp khối **"Thông tin phiên bản"** (phiên bản, ngày phát hành, vào lúc ..h..p, theo giờ Việt Nam, đúng thời điểm dựng bộ cài). Cần tạo lại khối này thì chạy `npm run ghi-chu`.
 4. **Không** tick *Set as a pre-release*; để tick **Set as the latest release** → **Publish release**.
 5. Trong vòng vài phút đến vài giờ (lần mở phần mềm tiếp theo), các máy đã cài sẽ nhận bản mới.
 

@@ -212,11 +212,60 @@ if (!app.requestSingleInstanceLock()) {
 // TỰ CẬP NHẬT PHẦN MỀM TỪ GITHUB RELEASES (electron-updater)
 // Tác giả đăng bản mới lên https://github.com/videodayhoctruyenhinhtanuyen-ux/be-luyen-go-10-ngon/releases
 // kèm 3 tệp: BeLuyenGo10Ngon-Setup-<phiên bản>.exe, latest.yml, .exe.blockmap.
-// Phần mềm đã cài: mở lên một lúc thì tự hỏi GitHub, có bản mới thì tải ngầm (chỉ tải phần thay đổi
-// nếu được), tải xong hỏi "Cập nhật ngay?"; chọn "Để sau" thì tự cài khi tắt phần mềm.
+// Phần mềm đã cài: mở lên một lúc thì tự hỏi GitHub, có bản mới thì:
+//   1. báo "Có phiên bản mới cần cập nhật" ở đầu màn hình, tải ngầm (hiện % tải);
+//   2. tải xong đếm ngược 5 giây ("Tự cập nhật sau 5… 4…", có nút Cập nhật ngay) rồi tự cài và mở lại;
+//   3. mở lại báo "Đã cập nhật xong, phiên bản hiện tại là V…".
+// Giao diện không nhận được tin (bản giao diện cũ) thì vẫn tự cài sau đếm ngược.
 // Lỗi mạng / chưa có bản mới: im lặng, không làm phiền học sinh.
 // ---------------------------------------------------------------------------
 const UPDATE_FIRST_CHECK_MS = 10 * 1000;
+const UPDATE_COUNTDOWN_SEC = 5; // tải xong, chờ 5 giây cho học sinh đọc thông báo rồi tự cài
+let lastUpdateStatus = null; // trạng thái gần nhất, để giao diện vừa mở (hoặc vừa tải lại) hỏi lại được
+
+function sendUpdateStatus(status) {
+  lastUpdateStatus = status;
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-status', status);
+  } catch {
+    /* cửa sổ đang đóng */
+  }
+}
+ipcMain.handle('get-update-status', () => lastUpdateStatus);
+
+// Ghi phiên bản lần chạy trước để lần mở sau biết vừa được cập nhật
+function versionStampFile() {
+  return path.join(app.getPath('userData'), 'phien-ban-lan-chay-truoc.json');
+}
+function checkJustUpdated() {
+  const current = app.getVersion();
+  let previous = '';
+  try {
+    previous = JSON.parse(fs.readFileSync(versionStampFile(), 'utf8')).version || '';
+  } catch {
+    /* lần chạy đầu tiên */
+  }
+  try {
+    fs.writeFileSync(versionStampFile(), JSON.stringify({ version: current, at: new Date().toISOString() }));
+  } catch {
+    /* không ghi được: bỏ qua */
+  }
+  if (previous && previous !== current) {
+    console.log('[luyen-go] Vua cap nhat', previous, '->', current);
+    let buildTime = '';
+    try {
+      buildTime = require('./build-info.json').buildTime || '';
+    } catch {
+      /* bản dựng thiếu tệp: bỏ qua giờ */
+    }
+    // Đợi trang tải xong mới báo
+    const notify = () => sendUpdateStatus({ stage: 'done', from: previous, version: current, buildTime });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', () => setTimeout(notify, 800));
+      else setTimeout(notify, 800);
+    }
+  }
+}
 const UPDATE_RECHECK_MS = 4 * 60 * 60 * 1000; // để máy mở cả ngày vẫn nhận bản mới
 
 function setupAutoUpdate() {
@@ -241,32 +290,39 @@ function setupAutoUpdate() {
     debug: () => {},
   };
 
-  let asked = false;
-  autoUpdater.on('update-available', (info) => console.log('[luyen-go] Co ban moi', info && info.version, '-> dang tai'));
+  let installing = false;
+  let newVersion = '';
+  const installNow = () => {
+    if (installing) return;
+    installing = true;
+    sendUpdateStatus({ stage: 'installing', version: newVersion });
+    // Cài im lặng (không hiện lại các trang Next) rồi tự mở lại phần mềm; Windows có thể hỏi quyền (Yes)
+    setTimeout(() => autoUpdater.quitAndInstall(true, true), 600);
+  };
+  ipcMain.handle('install-update-now', () => {
+    if (lastUpdateStatus && lastUpdateStatus.stage === 'ready') installNow();
+    return true;
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    newVersion = (info && info.version) || '';
+    console.log('[luyen-go] Co ban moi', newVersion, '-> dang tai');
+    sendUpdateStatus({ stage: 'available', version: newVersion, current: app.getVersion(), percent: 0 });
+  });
+  autoUpdater.on('download-progress', (p) => {
+    sendUpdateStatus({ stage: 'available', version: newVersion, current: app.getVersion(), percent: Math.round((p && p.percent) || 0) });
+  });
   autoUpdater.on('update-not-available', () => console.log('[luyen-go] Dang dung ban moi nhat', app.getVersion()));
-  autoUpdater.on('error', (err) => console.log('[luyen-go] Loi kiem tra cap nhat:', err && err.message));
-  autoUpdater.on('update-downloaded', async (info) => {
-    if (asked) return;
-    asked = true;
-    const version = (info && info.version) || '';
-    const opts = {
-      type: 'info',
-      title: 'Có bản cập nhật mới',
-      message: `Đã tải xong bản cập nhật ${version} của Bé Luyện Gõ 10 Ngón.`,
-      detail:
-        'Bấm "Cập nhật ngay" để cài (phần mềm tự tắt và mở lại sau khoảng nửa phút; Windows có thể hỏi quyền, bấm Yes).\n' +
-        'Bấm "Để sau" thì bản mới sẽ tự cài khi tắt phần mềm.',
-      buttons: ['Cập nhật ngay', 'Để sau'],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    };
-    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
-    const { response } = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
-    if (response === 0) {
-      // Cài im lặng (không hiện lại các trang Next) rồi tự mở lại phần mềm
-      setImmediate(() => autoUpdater.quitAndInstall(true, true));
-    }
+  autoUpdater.on('error', (err) => {
+    console.log('[luyen-go] Loi kiem tra cap nhat:', err && err.message);
+    // Đang tải dở mà lỗi mạng: ẩn thông báo, lần kiểm tra sau thử lại
+    if (lastUpdateStatus && lastUpdateStatus.stage === 'available') sendUpdateStatus({ stage: 'idle' });
+  });
+  autoUpdater.on('update-downloaded', (info) => {
+    if (installing) return;
+    newVersion = (info && info.version) || newVersion;
+    sendUpdateStatus({ stage: 'ready', version: newVersion, current: app.getVersion(), seconds: UPDATE_COUNTDOWN_SEC });
+    setTimeout(installNow, UPDATE_COUNTDOWN_SEC * 1000);
   });
 
   const check = () => autoUpdater.checkForUpdates().catch((err) => console.log('[luyen-go] Khong kiem tra duoc cap nhat:', err && err.message));
@@ -277,6 +333,7 @@ function setupAutoUpdate() {
 // Khi ứng dụng đã sẵn sàng
 app.whenReady().then(() => {
   createWindow();
+  checkJustUpdated();
   setupAutoUpdate();
 
   app.on('activate', () => {

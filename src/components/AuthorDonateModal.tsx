@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { WEB_VERSION, WEB_BUILD_TIME, getInstalledAppInfo, formatBuildTime } from '../utils/versionInfo';
+import { WEB_VERSION, WEB_BUILD_TIME, getInstalledAppInfo, formatReleaseDate, formatReleaseTime } from '../utils/versionInfo';
 import {
   X,
   Coffee,
@@ -264,13 +264,15 @@ export const AuthorDonateModal: React.FC<AuthorDonateModalProps> = ({ isOpen, on
                   <p>
                     <span className="font-bold">Bản cài trên máy:</span> phiên bản{' '}
                     <strong className="text-sky-800">{installed.version || 'không rõ'}</strong>
-                    {' · '}dựng lúc <strong>{formatBuildTime(installed.buildTime)}</strong>
+                    {' · '}ngày phát hành <strong>{formatReleaseDate(installed.buildTime)}</strong>
+                    {' · '}vào lúc <strong>{formatReleaseTime(installed.buildTime)}</strong>
                   </p>
                 )}
                 <p>
                   <span className="font-bold">{installed ? 'Giao diện đang chạy:' : 'Phiên bản phần mềm:'}</span> phiên bản{' '}
                   <strong className="text-sky-800">{WEB_VERSION || 'không rõ'}</strong>
-                  {' · '}cập nhật lúc <strong>{formatBuildTime(WEB_BUILD_TIME)}</strong>
+                  {' · '}ngày phát hành <strong>{formatReleaseDate(WEB_BUILD_TIME)}</strong>
+                  {' · '}vào lúc <strong>{formatReleaseTime(WEB_BUILD_TIME)}</strong>
                 </p>
                 {installed && (
                   <p className="text-[11px] text-slate-500">

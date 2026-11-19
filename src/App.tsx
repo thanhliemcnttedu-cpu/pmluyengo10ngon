@@ -26,6 +26,7 @@ import { TextbookIllustrationCard } from './components/TextbookIllustrationCard'
 import { KeyboardSkinTheme, KEYBOARD_THEMES, DEFAULT_KEYBOARD_THEME, DEFAULT_KEYBOARD_THEME_ID } from './data/keyboardThemes';
 import { KeyboardThemeModal } from './components/KeyboardThemeModal';
 import { CompletionModal } from './components/CompletionModal';
+import { UpdateBanner } from './components/UpdateBanner';
 import { UnikeyNoticeModal } from './components/UnikeyNoticeModal';
 import { GradeSelectionModal } from './components/GradeSelectionModal';
 import { AuthorCard } from './components/AuthorCard';
@@ -3187,6 +3188,9 @@ export default function App() {
       />
 
       {/* MÀN HÌNH TỔNG KẾT & KHEN THƯỞNG KHI HOÀN THÀNH BÀI GÕ (Điểm số, Kỹ năng, Hoa rơi & Tiếng vỗ tay) */}
+      {/* Thông báo tự cập nhật (chỉ hiện trong phần mềm cài trên máy) */}
+      <UpdateBanner />
+
       <CompletionModal
         isOpen={isCompleted && !resultHidden}
         onClose={() => setResultHidden(true)}
