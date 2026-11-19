@@ -157,7 +157,7 @@ export const TeacherAccountsPanel: React.FC<Props> = ({ offline }) => {
             <Users className="w-5 h-5 text-emerald-600" /> Tài khoản giáo viên
           </h3>
           <p className="text-sm text-slate-600">
-            Giáo viên phụ được thêm bài và sửa/xoá bài của chính mình; không giao bài cho lớp, không xoá bài của người khác.
+            Giáo viên phụ được soạn, sửa, xoá bài của chính mình và giao bài theo mã của mình (vd GV001); không sửa hay xoá bài của người khác.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

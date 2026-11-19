@@ -42,6 +42,8 @@ import {
   isNumpadLesson,
   displayedLessonNumber,
   lessonSortKeys,
+  moveLessonToPosition,
+  lessonGroupOf,
   lessonOwnerKey,
   isSystemLesson,
 } from './utils/lessonNumbering';
@@ -873,14 +875,21 @@ export default function App() {
     if (!isNumpadLesson(incoming)) {
       const name = stripLessonNumber(incoming.title);
       let storedTitle: string;
-      if (raw && raw.gradeLevel === incoming.gradeLevel) {
+      // Cùng khối và cùng nhóm: giữ số cũ; đổi khối hoặc đổi nhóm: đứng cuối bộ mới
+      if (raw && raw.gradeLevel === incoming.gradeLevel && lessonGroupOf(raw) === lessonGroupOf(incoming)) {
         const n = storedLessonNumber(raw.title);
         storedTitle = n !== null ? `Bài ${n}: ${name}` : name;
       } else {
         // Cùng bộ bài (hệ thống hoặc cùng mã giáo viên) và cùng khối lớp
         const owner = lessonOwnerKey(raw ?? incoming);
+        const grp = lessonGroupOf(incoming);
         const same = allLessons.filter(
-          (l) => l.gradeLevel === incoming.gradeLevel && !isNumpadLesson(l) && l.id !== incoming.id && lessonOwnerKey(l) === owner
+          (l) =>
+            l.gradeLevel === incoming.gradeLevel &&
+            !isNumpadLesson(l) &&
+            l.id !== incoming.id &&
+            lessonOwnerKey(l) === owner &&
+            lessonGroupOf(l) === grp
         );
         // Lớn hơn mọi khoá sắp xếp trong khối (kể cả khoá ảo của bài cũ không ghi số) -> đứng cuối
         const maxKey = Math.max(0, same.length, ...lessonSortKeys(same).values());
@@ -1061,11 +1070,12 @@ export default function App() {
       else if (group === 'prose') next.categoryTitleVi = `Văn SGK Lớp ${grade}`;
       else if (/Lớp \d/.test(next.categoryTitleVi || '')) next.categoryTitleVi = next.categoryTitleVi.replace(/Lớp \d/, `Lớp ${grade}`);
       if (/Khối \d/.test(next.subtitle || '')) next.subtitle = next.subtitle.replace(/Khối \d/, `Khối ${grade}`);
-      // Sang lớp khác: đứng cuối bộ bài cùng người tạo ở lớp mới (số hiển thị được đếm lại)
-      if (grade !== orig.gradeLevel && !isNumpadLesson(next)) {
+      // Sang lớp khác hoặc nhóm khác: đứng cuối bộ bài mới (số hiển thị được đếm lại)
+      if ((grade !== orig.gradeLevel || lessonGroupOf(next) !== lessonGroupOf(orig)) && !isNumpadLesson(next)) {
         const owner = lessonOwnerKey(orig);
+        const grp = lessonGroupOf(next);
         const same = working.filter(
-          (l) => l.gradeLevel === grade && !isNumpadLesson(l) && l.id !== id && lessonOwnerKey(l) === owner
+          (l) => l.gradeLevel === grade && !isNumpadLesson(l) && l.id !== id && lessonOwnerKey(l) === owner && lessonGroupOf(l) === grp
         );
         const maxKey = Math.max(0, same.length, ...lessonSortKeys(same).values());
         next.title = `Bài ${maxKey + 1}: ${stripLessonNumber(orig.title)}`;
@@ -1087,6 +1097,24 @@ export default function App() {
       handleRestart();
     }
     return { changed: changedIds.size, ok: cloudOk || serverOk };
+  };
+
+  // GÁN THỨ TỰ: đưa một bài thành "Bài N" trong bộ bài của nó, các bài khác dồn chỗ
+  const handleReorderLesson = async (id: string, newPos: number): Promise<{ ok: boolean; from: number; to: number } | null> => {
+    const r = moveLessonToPosition(allLessons, id, newPos);
+    if (!r) return null;
+    if (r.changed.length === 0) return { ok: true, from: r.from, to: r.to };
+    let cloudOk = false;
+    try {
+      cloudOk = await bulkUpsertLessonsToSupabase(r.changed);
+    } catch (err) {
+      console.warn('Lỗi khi lưu thứ tự bài lên Supabase:', err);
+    }
+    const serverOk = await persistLessonList(r.lessons);
+    if (customLesson && r.changed.some((l) => l.id === customLesson.id)) {
+      setCustomLesson(applyLessonNumbers(r.lessons).find((l) => l.id === customLesson.id) ?? null);
+    }
+    return { ok: cloudOk || serverOk, from: r.from, to: r.to };
   };
 
   // Nạp danh sách bài học và bài tập từ file USB (Offline)
@@ -2984,6 +3012,7 @@ export default function App() {
             onDeleteLesson={handleDeleteTeacherLesson}
             onBulkDeleteLessons={handleBulkDeleteLessons}
             onBulkUpdateLessons={handleBulkUpdateLessons}
+            onReorderLesson={handleReorderLesson}
             onResetSystemLesson={handleResetSystemLesson}
             onSelectLesson={(lesson) => setCustomLesson(lesson)}
             gradeAssignments={gradeAssignments}

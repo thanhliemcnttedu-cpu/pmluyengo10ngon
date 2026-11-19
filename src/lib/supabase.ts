@@ -298,6 +298,26 @@ export async function fetchTeacherAssignments(ownerCode: string): Promise<Record
   return out;
 }
 
+/** Mọi bài giao theo mã của tất cả giáo viên (quản trị xem bài nào đang được thầy cô giao). Lỗi: [] */
+export async function fetchAllTeacherAssignments(): Promise<TeacherGradeAssignment[]> {
+  try {
+    const { data, error } = await supabase
+      .from('teacher_assignments')
+      .select('owner_code, grade_level, lesson_ids, teacher_name, teacher_note, updated_at');
+    if (error || !Array.isArray(data)) return [];
+    return (data as any[]).map((r) => ({
+      ownerCode: r.owner_code,
+      gradeLevel: r.grade_level,
+      lessonIds: Array.isArray(r.lesson_ids) ? r.lesson_ids.filter(Boolean) : [],
+      teacherName: r.teacher_name || undefined,
+      teacherNote: r.teacher_note || undefined,
+      updatedAt: r.updated_at || undefined,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 /** Giáo viên lưu bài giao cho một khối lớp (danh sách rỗng = bỏ giao khối đó) */
 export async function saveTeacherAssignment(a: {
   ownerId: string;

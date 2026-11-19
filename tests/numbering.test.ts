@@ -8,6 +8,7 @@ import {
   nextLessonNumber,
   displayedLessonNumber,
   lessonSortKeys,
+  moveLessonToPosition,
 } from '../src/utils/lessonNumbering';
 
 const mk = (id: string, title: string, gradeLevel: number, extra: Partial<Lesson> = {}): Lesson =>
@@ -82,4 +83,66 @@ test('đánh số: mỗi bộ bài (hệ thống, từng giáo viên) đếm ri�
   assert.equal(nextLessonNumber(t, 3, null, 'GV001'), 3);
   assert.equal(nextLessonNumber(t, 3, null, 'GV002'), 2);
   assert.equal(nextLessonNumber(t, 3, null, 'GV009'), 1);
+});
+
+test('gán thứ tự: đưa Bài 5 lên Bài 1, các bài khác dồn xuống, bộ khác không đổi', () => {
+  const ls = [
+    mk('a', 'Bài 1: Trâu ơi', 3),
+    mk('b', 'Bài 2: Trăng ơi', 3),
+    mk('c', 'Bài 3: Bà còng', 3),
+    mk('d', 'Bài 4: Tin thắng trận', 3),
+    mk('e', 'Bài 5: Bác công nhân', 3),
+    mk('x', 'Bài 1: Lớp bốn', 4),
+    { ...mk('g', 'Bài 1: Bài cô Lan', 3), ownerCode: 'GV001' } as Lesson,
+  ];
+  const r = moveLessonToPosition(ls, 'e', 1)!;
+  assert.equal(r.from, 5);
+  assert.equal(r.to, 1);
+  const shown = applyLessonNumbers(r.lessons).filter((l) => l.gradeLevel === 3 && !l.ownerCode);
+  const ordered = [...shown].sort((p, q) => displayedLessonNumber(p)! - displayedLessonNumber(q)!).map((l) => l.title);
+  assert.deepEqual(ordered, ['Bài 1: Bác công nhân', 'Bài 2: Trâu ơi', 'Bài 3: Trăng ơi', 'Bài 4: Bà còng', 'Bài 5: Tin thắng trận']);
+  assert.equal(r.changed.length, 5);
+  assert.equal(r.lessons.find((l) => l.id === 'x')!.title, 'Bài 1: Lớp bốn');
+  assert.equal(r.lessons.find((l) => l.id === 'g')!.title, 'Bài 1: Bài cô Lan');
+});
+
+test('gán thứ tự: đưa bài xuống dưới, số vượt quá thì về cuối, cùng vị trí thì không đổi', () => {
+  const ls = [mk('a', 'Bài 1: A', 3), mk('b', 'Bài 2: B', 3), mk('c', 'Bài 3: C', 3)];
+  const r = moveLessonToPosition(ls, 'a', 99)!;
+  assert.equal(r.to, 3);
+  assert.deepEqual(r.lessons.map((l) => l.title), ['Bài 3: A', 'Bài 1: B', 'Bài 2: C']);
+  const same = moveLessonToPosition(ls, 'b', 2)!;
+  assert.equal(same.changed.length, 0);
+  assert.equal(moveLessonToPosition(ls, 'khong-co', 1), null);
+});
+
+test('đánh số theo nhóm: Luyện phím, Thơ, Văn trong cùng lớp đều bắt đầu từ Bài 1', () => {
+  const ex = (id: string, t: string) => ({ ...mk(id, t, 3), category: 'short_sentences', isPoemOrStory: false } as unknown as Lesson);
+  const po = (id: string, t: string) => ({ ...mk(id, t, 3), genre: 'poem', isPoemOrStory: true } as unknown as Lesson);
+  const pr = (id: string, t: string) => ({ ...mk(id, t, 3), genre: 'prose', isPoemOrStory: true } as unknown as Lesson);
+  const ls = [
+    ex('e1', 'Bài 1: Hai phím mốc'),
+    po('p1', 'Bài 2: Mèo con đi học'),
+    ex('e2', 'Bài 3: Hàng cơ sở'),
+    pr('v1', 'Bài 4: Cây bàng'),
+    po('p2', 'Bài 5: Quê hương'),
+    ex('e3', 'Bài 6: Hàng dưới'),
+  ];
+  const t = applyLessonNumbers(ls);
+  const title = (id: string) => t.find((l) => l.id === id)!.title;
+  assert.equal(title('e1'), 'Bài 1: Hai phím mốc');
+  assert.equal(title('e2'), 'Bài 2: Hàng cơ sở');
+  assert.equal(title('e3'), 'Bài 3: Hàng dưới');
+  assert.equal(title('p1'), 'Bài 1: Mèo con đi học');
+  assert.equal(title('p2'), 'Bài 2: Quê hương');
+  assert.equal(title('v1'), 'Bài 1: Cây bàng');
+  assert.equal(nextLessonNumber(t, 3, null, 'ADMIN', 'poem'), 3);
+  assert.equal(nextLessonNumber(t, 3, null, 'ADMIN', 'prose'), 2);
+  // Gán thứ tự chỉ dồn chỗ trong nhóm Thơ, không đụng nhóm khác
+  const r = moveLessonToPosition(t, 'p2', 1)!;
+  assert.equal(r.from, 2);
+  assert.deepEqual(r.changed.map((l) => l.id).sort(), ['p1', 'p2']);
+  const t2 = applyLessonNumbers(r.lessons);
+  assert.equal(t2.find((l) => l.id === 'p2')!.title, 'Bài 1: Quê hương');
+  assert.equal(t2.find((l) => l.id === 'e1')!.title, 'Bài 1: Hai phím mốc');
 });

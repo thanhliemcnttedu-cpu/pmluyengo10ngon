@@ -7,7 +7,9 @@ import {
   lessonOwnerKey,
   isSystemLesson,
   teacherDirectory,
+  lessonGroupRank,
 } from '../utils/lessonNumbering';
+import { lessonGroupOf, LESSON_GROUP_LABEL, GROUP_TONE, type LessonGroup } from '../utils/lessonGroups';
 import {
   loginTeacher,
   logoutTeacher,
@@ -61,6 +63,7 @@ import {
   uploadImageToSupabaseStorage,
   bulkUpsertLessonsToSupabase,
   fetchTeacherAssignments,
+  fetchAllTeacherAssignments,
   saveTeacherAssignment,
   type TeacherGradeAssignment,
 } from '../lib/supabase';
@@ -164,6 +167,8 @@ interface TeacherLessonModalProps {
   onRenumberLessons?: () => Promise<{ changed: number; ok: boolean }>;
   /** Xoá nhiều bài một lần; trả số bài đã xoá và số bài máy chủ từ chối */
   onBulkDeleteLessons?: (ids: string[]) => Promise<{ deleted: number; denied: number }>;
+  /** Gán thứ tự: đưa bài thành "Bài N" trong bộ bài của nó */
+  onReorderLesson?: (id: string, newPos: number) => Promise<{ ok: boolean; from: number; to: number } | null>;
   /** Chuyển nhiều bài sang lớp khác / nhóm khác */
   onBulkUpdateLessons?: (
     ids: string[],
@@ -202,6 +207,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   onRenumberLessons,
   onBulkDeleteLessons,
   onBulkUpdateLessons,
+  onReorderLesson,
   onSelectLesson,
   gradeAssignments = {},
   onAssignLessonToGrade,
@@ -272,7 +278,13 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const contentTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Bộ lọc & sắp xếp phân cấp ở tab 'manage'
-  const [gradeFilter, setGradeFilter] = useState<number | 'all' | 'assigned' | 'poems'>('all');
+  // Lọc kết hợp: "Đang giao" (gradeFilter) + Lớp (subGrade) + Nhóm (groupFilter), chọn cùng lúc được
+  const [gradeFilter, setGradeFilter] = useState<'all' | 'assigned'>('all');
+  const [groupFilter, setGroupFilter] = useState<'all' | LessonGroup>('all');
+  // Ô gán thứ tự đang mở cho bài nào (id) và số đang gõ
+  const [reorderId, setReorderId] = useState<string | null>(null);
+  const [reorderValue, setReorderValue] = useState('');
+  const [reorderBusy, setReorderBusy] = useState(false);
   // Lọc thêm theo lớp khi đang xem Tất cả / Đang giao / Thơ & Văn SGK
   const [subGrade, setSubGrade] = useState<'all' | 3 | 4 | 5>('all');
   // Nguồn bài: admin 'all' | 'system' | 'teachers' | 'GV001'…; giáo viên phụ 'mine' | 'system'
@@ -284,7 +296,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkGrade, setBulkGrade] = useState<'' | '3' | '4' | '5'>('');
   const [bulkGroup, setBulkGroup] = useState<'' | 'exercise' | 'poem' | 'prose'>('');
-  const subGradeApplies = gradeFilter === 'all' || gradeFilter === 'assigned' || gradeFilter === 'poems';
+  const subGradeApplies = true;
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   const [sortBy, setSortBy] = useState<'hierarchy' | 'assigned_first' | 'poems_first' | 'title_az' | 'wpm_asc'>('hierarchy');
 
@@ -369,7 +381,9 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const [assignGradeFilter, setAssignGradeFilter] = useState<number | 'all'>(3);
   // Giao bài: lọc theo nguồn bài (hệ thống / giáo viên) và mục (thơ – văn SGK / luyện phím)
   const [assignSource, setAssignSource] = useState<string>('all');
-  const [assignCategory, setAssignCategory] = useState<'all' | 'poems' | 'practice'>('all');
+  const [assignCategory, setAssignCategory] = useState<'all' | LessonGroup>('all');
+  // (Quản trị) bài đang được các thầy cô giao theo mã: id bài -> ["GV002 · lớp 3", …]
+  const [allCodeAssignments, setAllCodeAssignments] = useState<TeacherGradeAssignment[]>([]);
   const [assignLimit, setAssignLimit] = useState(30);
   // Bài giao của chính giáo viên phụ (theo mã GV…), tách khỏi bài giao của quản trị
   const [myAssignments, setMyAssignments] = useState<Record<number, TeacherGradeAssignment>>({});
@@ -407,11 +421,13 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     const orig = editingLessonId ? effectiveLessons.find((l) => l.id === editingLessonId) : undefined;
     // Bộ bài: sửa bài thì theo người tạo bài đó; bài mới thì theo tài khoản đang soạn
     const owner = orig ? lessonOwnerKey(orig) : teacherSession?.role === 'teacher' ? teacherSession.code : 'ADMIN';
-    if (orig && orig.gradeLevel === gradeLevel) {
-      return displayedLessonNumber(orig) ?? nextLessonNumber(effectiveLessons, gradeLevel, editingLessonId, owner);
+    // Số bài đánh riêng theo nhóm: nhóm của bài đang soạn
+    const grp = isPoemOrStory ? (genre === 'prose' ? 'prose' : 'poem') : 'exercise';
+    if (orig && orig.gradeLevel === gradeLevel && lessonGroupOf(orig) === grp) {
+      return displayedLessonNumber(orig) ?? nextLessonNumber(effectiveLessons, gradeLevel, editingLessonId, owner, grp);
     }
-    return nextLessonNumber(effectiveLessons, gradeLevel, editingLessonId, owner);
-  }, [effectiveLessons, editingLessonId, gradeLevel, teacherSession?.role, teacherSession?.code]);
+    return nextLessonNumber(effectiveLessons, gradeLevel, editingLessonId, owner, grp);
+  }, [effectiveLessons, editingLessonId, gradeLevel, isPoemOrStory, genre, teacherSession?.role, teacherSession?.code]);
 
   // Lấy danh sách ID của tất cả bài đang được giao bài cho bất kỳ lớp nào (Safely)
   const allAssignedLessonIds = useMemo(() => {
@@ -545,6 +561,21 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     setPassword('');
     setAuthNotice(SESSION_EXPIRED_NOTICE);
   };
+
+  // Quản trị: nạp bài giao theo mã của mọi thầy cô để cột Trạng thái cho biết bài nào đang được giao
+  useEffect(() => {
+    if (!isOpen || teacherSession?.role !== 'admin') {
+      setAllCodeAssignments([]);
+      return;
+    }
+    let alive = true;
+    fetchAllTeacherAssignments().then((a) => {
+      if (alive) setAllCodeAssignments(a);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [isOpen, teacherSession?.role]);
 
   // Giáo viên phụ: nạp bài giao theo mã của mình rồi đưa vào màn Giao bài
   useEffect(() => {
@@ -1219,6 +1250,9 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
       const ownA = isSystemLesson(a) ? '' : lessonOwnerKey(a);
       const ownB = isSystemLesson(b) ? '' : lessonOwnerKey(b);
       if (ownA !== ownB) return ownA.localeCompare(ownB, undefined, { numeric: true });
+      // Trong một bộ bài: nhóm Luyện phím → Thơ → Văn → Numpad, mỗi nhóm theo số bài
+      const rk = lessonGroupRank(a) - lessonGroupRank(b);
+      if (rk !== 0) return rk;
       const numA = displayedLessonNumber(a) ?? 100000 + (a.level || 0);
       const numB = displayedLessonNumber(b) ?? 100000 + (b.level || 0);
       return numA - numB;
@@ -1249,6 +1283,23 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
         return list;
     }
   };
+
+  // Bài đang được giao theo mã: quản trị thấy của mọi thầy cô, giáo viên thấy của chính mình
+  const codeAssignedByLesson = useMemo(() => {
+    const m = new Map<string, string[]>();
+    const list: TeacherGradeAssignment[] = isAdminRole
+      ? allCodeAssignments
+      : teacherSession?.role === 'teacher'
+      ? Object.values(myAssignments)
+      : [];
+    for (const a of list) {
+      for (const id of a.lessonIds || []) {
+        const label = isAdminRole ? `${a.ownerCode} giao lớp ${a.gradeLevel}` : `Đang giao lớp ${a.gradeLevel}`;
+        m.set(id, [...(m.get(id) || []), label]);
+      }
+    }
+    return m;
+  }, [isAdminRole, allCodeAssignments, myAssignments, teacherSession?.role]);
 
   // Filter lessons in manage tab
   const isTeacherRole = teacherSession?.role === 'teacher';
@@ -1286,14 +1337,13 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   // Đổi bộ lọc thì quay về 20 bài đầu
   useEffect(() => {
     setVisibleLimit(20);
-  }, [lessonSource, gradeFilter, subGrade, searchKeyword, sortBy]);
+  }, [lessonSource, gradeFilter, groupFilter, subGrade, searchKeyword, sortBy]);
 
   const filteredManageLessons = useMemo(() => {
     const result = manageSource.filter((l) => {
       if (subGradeApplies && subGrade !== 'all' && l.gradeLevel !== subGrade) return false;
-      if (gradeFilter === 'assigned' && !allAssignedLessonIds.has(l.id)) return false;
-      if (gradeFilter === 'poems' && !(l.isPoemOrStory || l.category === 'poems_stories')) return false;
-      if (typeof gradeFilter === 'number' && l.gradeLevel !== gradeFilter) return false;
+      if (gradeFilter === 'assigned' && !allAssignedLessonIds.has(l.id) && !codeAssignedByLesson.has(l.id)) return false;
+      if (groupFilter !== 'all' && lessonGroupOf(l) !== groupFilter) return false;
       if (searchKeyword.trim()) {
         const kw = searchKeyword.toLowerCase();
         const inTitle = (l.title || '').toLowerCase().includes(kw);
@@ -1304,7 +1354,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     });
 
     return sortLessons(result);
-  }, [manageSource, gradeFilter, subGrade, subGradeApplies, searchKeyword, sortBy, allAssignedLessonIds]);
+  }, [manageSource, gradeFilter, groupFilter, subGrade, subGradeApplies, searchKeyword, sortBy, allAssignedLessonIds, codeAssignedByLesson]);
 
   // Phân nhóm theo hệ thống phân cấp (Hierarchical Grouping)
   const groupedManageLessons = useMemo(() => {
@@ -1384,12 +1434,12 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
   const bulkEnabled = !!onBulkDeleteLessons && !!onBulkUpdateLessons;
   // Mọi bài đang khớp bộ lọc mà tài khoản này được sửa (để "Chọn tất cả")
   const selectableInView = useMemo(() => {
-    const grouped = gradeFilter === 'all' && subGrade === 'all' && sortBy === 'hierarchy' && !searchKeyword.trim();
+    const grouped = gradeFilter === 'all' && groupFilter === 'all' && subGrade === 'all' && sortBy === 'hierarchy' && !searchKeyword.trim();
     const list = grouped ? groupedManageLessons.flatMap((g) => g.lessons) : filteredManageLessons;
     const seen = new Set<string>();
     return list.filter((l) => l && canModifyLesson(l) && !seen.has(l.id) && !!seen.add(l.id));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupedManageLessons, filteredManageLessons, gradeFilter, subGrade, sortBy, searchKeyword, isAdminRole, teacherSession?.userId]);
+  }, [groupedManageLessons, filteredManageLessons, gradeFilter, groupFilter, subGrade, sortBy, searchKeyword, isAdminRole, teacherSession?.userId]);
   // Bỏ khỏi lựa chọn các bài không còn (đã xoá, đổi tài khoản)
   useEffect(() => {
     setBulkSelected((prev) => {
@@ -1461,18 +1511,35 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
     }
   };
 
+  // Nhãn nhóm có màu (Luyện phím / Thơ SGK / Văn SGK / Numpad) dùng ở màn Giao bài
+  const groupChip = (l: Lesson) => {
+    const g = lessonGroupOf(l);
+    const t = GROUP_TONE[g ?? 'numpad'];
+    return (
+      <span className={`text-[11px] font-black px-1.5 py-0.5 rounded-md border ${t.chip}`} data-chip-group={g ?? 'numpad'}>
+        {g === 'poem' ? '📜 Thơ SGK' : g === 'prose' ? '📝 Văn SGK' : g === 'exercise' ? '⌨️ Luyện phím' : '🖩 Numpad'}
+      </span>
+    );
+  };
+
   // Một DÒNG bài học (gọn, đọc lướt nhanh); bấm tên bài để xem trước nội dung
   const renderLessonRow = (l: Lesson) => {
     if (!l || !l.id) return null;
     const isTeacherMade = l.id.startsWith('teacher-') || !!l.authorTeacher;
     const assignedGrades = getAssignedGradesForLesson(l.id);
     const isAssigned = assignedGrades.length > 0;
+    const codeAssigned = codeAssignedByLesson.get(l.id) || [];
     const isPoem = l.isPoemOrStory || l.category === 'poems_stories';
     const isFree = l.isFreePractice ?? true;
     const isOpenPreview = previewLessonId === l.id;
-    const kind = isPoem ? (l.genre === 'prose' ? 'Văn SGK' : 'Thơ SGK') : 'Luyện phím';
+    const grp = lessonGroupOf(l);
+    const kind = grp === 'prose' ? 'Văn SGK' : grp === 'poem' ? 'Thơ SGK' : isNumpadLesson(l) ? 'Numpad' : 'Luyện phím';
     const canModify = canModifyLesson(l);
     const canDelete = canModify && (isAdminRole || l.id.startsWith('teacher-'));
+    // Gán thứ tự: bài mình được sửa và có số "Bài N" (bài Numpad có dãy số riêng)
+    const curNo = displayedLessonNumber(l);
+    const canReorder = !!onReorderLesson && canModify && curNo !== null;
+    const isReordering = reorderId === l.id;
 
     return (
       <li key={`row-${l.id}`} data-lesson-row={l.id} className="border-b border-slate-100 last:border-b-0">
@@ -1528,16 +1595,32 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
             </span>
           </button>
 
-          <span className="hidden xl:inline text-xs font-semibold text-slate-600">
-            {isPoem && <Feather className="inline w-3.5 h-3.5 mr-1 text-purple-600" />}
-            {kind}
+          <span className="hidden xl:inline">
+            <span className={`inline-block text-xs font-black px-2 py-0.5 rounded-full border ${GROUP_TONE[grp ?? 'numpad'].chip}`} data-kind-group={grp ?? 'numpad'}>
+              {kind}
+            </span>
           </span>
           <span className="hidden xl:inline text-xs font-semibold text-slate-600 tabular-nums">{l.targetWpm || 18} WPM</span>
 
           <span className="hidden xl:flex items-center">
-            {isAssigned ? (
-              <span className="text-xs font-black px-2 py-1 rounded-lg bg-rose-100 text-rose-800">
-                🎯 Đang giao lớp {assignedGrades.join(', ')}
+            {codeAssigned.length > 0 && !isAssigned ? (
+              <span className="flex flex-col gap-0.5" data-code-assigned={l.id}>
+                {codeAssigned.map((t) => (
+                  <span key={t} className="text-xs font-black px-2 py-0.5 rounded-lg bg-amber-100 text-amber-900 whitespace-nowrap">
+                    📌 {t}
+                  </span>
+                ))}
+              </span>
+            ) : isAssigned ? (
+              <span className="flex flex-col gap-0.5">
+                <span className="text-xs font-black px-2 py-1 rounded-lg bg-rose-100 text-rose-800">
+                  🎯 Đang giao lớp {assignedGrades.join(', ')}
+                </span>
+                {codeAssigned.map((t) => (
+                  <span key={t} className="text-xs font-black px-2 py-0.5 rounded-lg bg-amber-100 text-amber-900 whitespace-nowrap">
+                    📌 {t}
+                  </span>
+                ))}
               </span>
             ) : isFree ? (
               <span className="text-xs font-bold px-2 py-1 rounded-lg bg-teal-50 text-teal-800 flex items-center gap-1">
@@ -1551,6 +1634,24 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
           </span>
 
           <div className="flex items-center gap-1 justify-end">
+            {canReorder && (
+              <button
+                type="button"
+                onClick={() => {
+                  setReorderId(isReordering ? null : l.id);
+                  setReorderValue(String(curNo));
+                }}
+                data-action="reorder-lesson"
+                aria-expanded={isReordering}
+                className={`h-8 px-2 rounded-lg font-black text-xs flex items-center gap-1 cursor-pointer border ${
+                  isReordering ? 'bg-amber-500 border-amber-500 text-white' : 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100'
+                }`}
+                title="Gán lại thứ tự: đổi bài này thành Bài số khác"
+              >
+                <span aria-hidden="true">#</span>
+                <span className="hidden sm:inline">Thứ tự</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -1621,6 +1722,68 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
             )}
           </div>
         </div>
+
+        {isReordering && canReorder && (
+          <form
+            className="mx-3 mb-2 px-3 py-2 rounded-xl bg-amber-50 border-2 border-amber-300 flex flex-wrap items-center gap-2 text-sm"
+            data-testid="reorder-form"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const n = parseInt(reorderValue, 10);
+              if (!Number.isFinite(n) || n < 1) {
+                triggerSaveToast('Thầy cô nhập số thứ tự từ 1 trở lên nhé.');
+                return;
+              }
+              if (n === curNo) {
+                setReorderId(null);
+                return;
+              }
+              setReorderBusy(true);
+              try {
+                const r = await onReorderLesson!(l.id, n);
+                setReorderId(null);
+                if (!r) triggerSaveToast('Bài này không gán thứ tự được.');
+                else
+                  triggerSaveToast(
+                    r.ok
+                      ? `✅ Đã chuyển "${stripLessonNumber(l.title)}" từ Bài ${r.from} thành Bài ${r.to}. Danh sách đã xếp lại theo số bài.`
+                      : `Đã đổi thứ tự trên máy này nhưng CHƯA lưu được lên máy chủ. Thầy cô kiểm tra mạng rồi thử lại nhé.`
+                  );
+              } finally {
+                setReorderBusy(false);
+              }
+            }}
+          >
+            <span className="font-bold text-amber-950">
+              Đổi <b>Bài {curNo}</b> thành Bài số
+            </span>
+            <input
+              type="number"
+              min={1}
+              value={reorderValue}
+              onChange={(e) => setReorderValue(e.target.value)}
+              autoFocus
+              aria-label="Số thứ tự mới"
+              data-testid="reorder-input"
+              className="w-20 h-9 px-2 rounded-lg border-2 border-amber-400 bg-white text-center text-base font-black focus:outline-none focus:border-amber-600"
+            />
+            <span className="text-xs text-slate-600">
+              (Lớp {l.gradeLevel || '–'} · {kind} · bộ bài {lessonOwnerKey(l)}; các bài khác trong nhóm tự dồn chỗ)
+            </span>
+            <span className="flex items-center gap-1.5 ml-auto">
+              <button
+                type="submit"
+                disabled={reorderBusy}
+                className="h-9 px-4 rounded-full bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white font-black cursor-pointer"
+              >
+                {reorderBusy ? 'Đang lưu…' : 'Gán thứ tự'}
+              </button>
+              <button type="button" onClick={() => setReorderId(null)} className="h-9 px-3 rounded-full font-bold text-slate-600 hover:bg-white cursor-pointer">
+                Huỷ
+              </button>
+            </span>
+          </form>
+        )}
 
         {/* Xem trước: nội dung đầy đủ, ảnh SGK, lời dặn, quyền tự do luyện */}
         {isOpenPreview && (
@@ -1756,14 +1919,14 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
         {/* ======================================================== */}
         {!isAuthenticated ? (
           /* Teacher Login Form */
-          <div className="flex-1 flex items-center justify-center p-6 sm:p-10">
-            <div className="p-8 rounded-3xl bg-slate-50 border-2 border-emerald-300 text-center max-w-md w-full shadow-lg space-y-4">
-              <div className="w-16 h-16 rounded-3xl bg-emerald-100 border-2 border-emerald-300 flex items-center justify-center text-3xl shadow-inner mx-auto">
+          <div className="flex-1 flex items-center justify-center p-4 sm:p-10 overflow-y-auto">
+            <div className="p-6 sm:p-10 rounded-3xl bg-slate-50 border-2 border-emerald-300 text-center w-full max-w-[min(640px,100%)] shadow-lg space-y-5" data-testid="login-card">
+              <div className="w-20 h-20 rounded-3xl bg-emerald-100 border-2 border-emerald-300 flex items-center justify-center text-4xl shadow-inner mx-auto">
                 🔐
               </div>
               <div>
-                <h3 className="text-lg font-black text-slate-900">Đăng Nhập Quản Trị Giáo Viên</h3>
-                <p className="text-xs text-slate-600 mt-1">
+                <h3 className="text-2xl font-black text-slate-900">Đăng Nhập Quản Trị Giáo Viên</h3>
+                <p className="text-sm text-slate-600 mt-1.5">
                   Vui lòng đăng nhập để biên soạn bài học SGK, quản lý chuyên đề thơ văn và phân quyền giao bài
                 </p>
               </div>
@@ -1779,17 +1942,19 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                   }}
                 />
               ) : (
-              <form onSubmit={handleLogin} className="space-y-3 text-left">
+              <form onSubmit={handleLogin} className="space-y-4 text-left">
                 {authNotice && (
                   <p className="text-xs text-emerald-700 font-bold bg-emerald-50 border border-emerald-200 rounded-xl p-2.5" data-testid="auth-notice">
                     {authNotice}
                   </p>
                 )}
                 <div>
-                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
+                  <label htmlFor="login-username" className="block text-sm font-black text-slate-700 uppercase tracking-wider mb-1.5">
                     Tên đăng nhập:
                   </label>
+                  {/* Phông kiểu máy chữ: chữ i, I, l, 1 và o, O, 0 khác hẳn nhau, khó gõ nhầm tài khoản */}
                   <input
+                    id="login-username"
                     type="text"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
@@ -1797,39 +1962,45 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                     required
                     autoFocus
                     autoComplete="off"
-                    className="w-full text-sm font-bold px-3.5 py-2.5 rounded-xl bg-white border-2 border-slate-300 focus:outline-none focus:border-emerald-500 transition-colors"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    className="login-credential w-full text-xl px-4 py-3.5 rounded-2xl bg-white border-2 border-slate-300 focus:outline-none focus:border-emerald-500 transition-colors"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
+                  <label htmlFor="login-password" className="block text-sm font-black text-slate-700 uppercase tracking-wider mb-1.5">
                     Mật khẩu:
                   </label>
                   <div className="relative flex items-center">
                     <input
+                      id="login-password"
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="Nhập mật khẩu"
                       required
                       autoComplete="current-password"
-                      className="w-full text-sm font-bold pl-3.5 pr-11 py-2.5 rounded-xl bg-white border-2 border-slate-300 focus:outline-none focus:border-emerald-500 transition-colors"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      className="login-credential w-full text-xl pl-4 pr-14 py-3.5 rounded-2xl bg-white border-2 border-slate-300 focus:outline-none focus:border-emerald-500 transition-colors"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword((prev) => !prev)}
-                      className="absolute right-2.5 p-1.5 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer rounded-lg hover:bg-slate-100"
+                      className="absolute right-2 w-11 h-11 flex items-center justify-center text-slate-400 hover:text-slate-700 transition-colors cursor-pointer rounded-xl hover:bg-slate-100"
                       title={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu để kiểm tra'}
+                      aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
                     >
                       {showPassword ? (
-                        <EyeOff className="w-4 h-4 text-emerald-600" />
+                        <EyeOff className="w-6 h-6 text-emerald-600" />
                       ) : (
-                        <Eye className="w-4 h-4 text-slate-500" />
+                        <Eye className="w-6 h-6 text-slate-500" />
                       )}
                     </button>
                   </div>
                   {authError && (
-                    <p className="text-xs text-rose-600 font-bold mt-1.5">{authError}</p>
+                    <p className="text-sm text-rose-600 font-bold mt-2">{authError}</p>
                   )}
                 </div>
 
@@ -2056,52 +2227,68 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                           </select>
                         </label>
                       )}
-                      {[
-                        { label: 'Tất cả', val: 'all' as const },
-                        { label: '🎯 Đang giao', val: 'assigned' as const },
-                        { label: 'Lớp 3', val: 3 },
-                        { label: 'Lớp 4', val: 4 },
-                        { label: 'Lớp 5', val: 5 },
-                        { label: '📜 Thơ & Văn SGK', val: 'poems' as const },
-                      ].map((item) => (
-                        <button
-                          key={String(item.val)}
-                          type="button"
-                          onClick={() => setGradeFilter(item.val)}
-                          aria-pressed={gradeFilter === item.val}
-                          className={`h-9 px-3 rounded-full text-sm font-bold transition-colors cursor-pointer ${
-                            gradeFilter === item.val
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                      {/* Lọc theo lớp cho các mục gộp nhiều lớp (Tất cả, Đang giao, Thơ & Văn SGK) */}
-                      {subGradeApplies && (
-                        <div className="flex items-center gap-1 pl-2 ml-1 border-l-2 border-slate-200" role="group" aria-label="Lọc theo lớp" data-testid="manage-subgrade">
-                          <span className="text-xs font-bold text-slate-500 pr-0.5">Lọc lớp:</span>
+                      {/* LỌC KẾT HỢP: chọn Lớp và Nhóm cùng lúc (vd Lớp 3 + Nhóm Thơ SGK), thêm "Đang giao" nếu cần */}
+                      <div className="w-full flex flex-col gap-1.5" data-testid="manage-filters">
+                        <div className="flex items-center gap-1.5 flex-wrap" role="group" aria-label="Lọc theo lớp" data-testid="manage-subgrade">
+                          <span className="w-14 text-xs font-black text-slate-500 uppercase">Lớp</span>
                           {([
                             { label: 'Mọi lớp', val: 'all' as const },
-                            { label: '3', val: 3 as const },
-                            { label: '4', val: 4 as const },
-                            { label: '5', val: 5 as const },
+                            { label: 'Lớp 3', val: 3 as const },
+                            { label: 'Lớp 4', val: 4 as const },
+                            { label: 'Lớp 5', val: 5 as const },
                           ]).map((g) => (
                             <button
                               key={String(g.val)}
                               type="button"
                               onClick={() => setSubGrade(g.val)}
                               aria-pressed={subGrade === g.val}
-                              className={`h-8 min-w-[36px] px-2.5 rounded-full text-xs font-black cursor-pointer transition-colors ${
+                              data-filter-grade={g.val}
+                              className={`h-9 px-3.5 rounded-full text-sm font-bold transition-colors cursor-pointer ${
                                 subGrade === g.val ? 'bg-sky-600 text-white' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
                               }`}
                             >
-                              {g.val === 'all' ? g.label : `Lớp ${g.label}`}
+                              {g.label}
                             </button>
                           ))}
+                          <button
+                            type="button"
+                            onClick={() => setGradeFilter(gradeFilter === 'assigned' ? 'all' : 'assigned')}
+                            aria-pressed={gradeFilter === 'assigned'}
+                            data-filter-assigned
+                            className={`h-9 px-3.5 rounded-full text-sm font-bold transition-colors cursor-pointer ml-1 ${
+                              gradeFilter === 'assigned' ? 'bg-rose-600 text-white' : 'bg-white text-rose-800 border border-rose-200 hover:bg-rose-50'
+                            }`}
+                            title="Chỉ hiện bài đang giao cho học sinh (bấm lần nữa để bỏ)"
+                          >
+                            🎯 Đang giao
+                          </button>
                         </div>
-                      )}
+                        <div className="flex items-center gap-1.5 flex-wrap" role="group" aria-label="Lọc theo nhóm bài" data-testid="manage-group">
+                          <span className="w-14 text-xs font-black text-slate-500 uppercase">Nhóm</span>
+                          {([
+                            { label: 'Mọi nhóm', val: 'all' as const },
+                            { label: '⌨️ ' + LESSON_GROUP_LABEL.exercise, val: 'exercise' as const },
+                            { label: '📜 ' + LESSON_GROUP_LABEL.poem, val: 'poem' as const },
+                            { label: '📝 ' + LESSON_GROUP_LABEL.prose, val: 'prose' as const },
+                          ]).map((g) => (
+                            <button
+                              key={g.val}
+                              type="button"
+                              onClick={() => setGroupFilter(g.val)}
+                              aria-pressed={groupFilter === g.val}
+                              data-filter-group={g.val}
+                              className={`h-9 px-3.5 rounded-full text-sm font-bold transition-colors cursor-pointer ${
+                                groupFilter === g.val ? 'bg-emerald-600 text-white' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              {g.label}
+                            </button>
+                          ))}
+                          <span className="text-xs font-bold text-slate-500 ml-1" data-testid="manage-filter-count">
+                            → {filteredManageLessons.length} bài
+                          </span>
+                        </div>
+                      </div>
                     </div>
                     <div className="flex items-center gap-2 ml-auto flex-wrap">
                       <label className="h-9 flex items-center gap-1.5 bg-white px-3 rounded-full border border-slate-300 w-48 sm:w-60">
@@ -2231,7 +2418,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                       <span>Trạng thái</span>
                       <span className="text-right pr-1">Thao tác</span>
                     </div>
-                    {gradeFilter === 'all' && subGrade === 'all' && sortBy === 'hierarchy' && !searchKeyword.trim() ? (
+                    {gradeFilter === 'all' && groupFilter === 'all' && subGrade === 'all' && sortBy === 'hierarchy' && !searchKeyword.trim() ? (
                       groupedManageLessons.map((group) =>
                         !group || group.lessons.length === 0 ? null : (
                           <section key={group.id} aria-label={group.badge}>
@@ -2670,7 +2857,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
 
                     <div className="sm:col-span-3">
                       <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
-                        Thể loại / Chuyên đề:
+                        Nhóm bài:
                       </label>
                       <select
                         value={genre}
@@ -2681,9 +2868,9 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                         }}
                         className="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-300 text-slate-900 text-xs font-black focus:outline-none focus:border-emerald-500 cursor-pointer"
                       >
-                        <option value="exercise">⌨️ Bài luyện phím cơ bản</option>
-                        <option value="poem">📜 Bài thơ SGK (xuống dòng Enter)</option>
-                        <option value="prose">📝 Đoạn văn xuôi SGK (liền mạch)</option>
+                        <option value="exercise">⌨️ Nhóm Luyện phím</option>
+                        <option value="poem">📜 Nhóm Thơ SGK (xuống dòng Enter)</option>
+                        <option value="prose">📝 Nhóm Văn SGK (đoạn văn liền mạch)</option>
                       </select>
                     </div>
 
@@ -2835,8 +3022,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                     if (assignSource === 'teachers' && isSystemLesson(l)) return false;
                     if (!['all', 'system', 'teachers', 'mine'].includes(assignSource) && lessonOwnerKey(l) !== assignSource) return false;
                     const isPoem = !!l.isPoemOrStory || l.category === 'poems_stories';
-                    if (assignCategory === 'poems' && !isPoem) return false;
-                    if (assignCategory === 'practice' && isPoem) return false;
+                    if (assignCategory !== 'all' && lessonGroupOf(l) !== assignCategory) return false;
                     if (kw && !(l.title || '').toLowerCase().includes(kw) && !(l.text || '').toLowerCase().includes(kw)) return false;
                     return true;
                   })
@@ -2845,6 +3031,8 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                     if (g) return g;
                     const o = (isSystemLesson(a) ? '' : lessonOwnerKey(a)).localeCompare(isSystemLesson(b) ? '' : lessonOwnerKey(b), undefined, { numeric: true });
                     if (o) return o;
+                    const rk = lessonGroupRank(a) - lessonGroupRank(b);
+                    if (rk) return rk;
                     return (displayedLessonNumber(a) ?? 9999) - (displayedLessonNumber(b) ?? 9999);
                   });
                 const chosen = validSelectedLessonIds
@@ -2884,9 +3072,14 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                       </div>
                     </div>
 
+                    {/* Thông báo nổi ở đáy màn hình: hiện/ẩn không làm cả màn dịch lên xuống (tránh bấm nhầm) */}
                     {assignmentSuccessMsg && (
-                      <div className="p-3 rounded-2xl bg-emerald-100 border border-emerald-300 text-emerald-950 font-bold text-sm flex items-center gap-2">
-                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <div
+                        role="status"
+                        data-testid="assign-success"
+                        className="fixed left-1/2 -translate-x-1/2 bottom-6 z-[70] max-w-[min(720px,92vw)] p-3 rounded-2xl bg-emerald-600 text-white font-bold text-sm flex items-center gap-2 shadow-2xl"
+                      >
+                        <CheckCircle2 className="w-5 h-5 text-white shrink-0" />
                         <span>{assignmentSuccessMsg}</span>
                       </div>
                     )}
@@ -2976,13 +3169,15 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                             </select>
                             <select
                               value={assignCategory}
-                              onChange={(e) => setAssignCategory(e.target.value as 'all' | 'poems' | 'practice')}
-                              aria-label="Mục bài"
+                              onChange={(e) => setAssignCategory(e.target.value as 'all' | LessonGroup)}
+                              aria-label="Nhóm bài"
+                              data-testid="assign-group"
                               className="h-9 px-2 rounded-xl bg-white border border-slate-300 text-sm font-bold cursor-pointer"
                             >
-                              <option value="all">Mọi mục</option>
-                              <option value="poems">Thơ & Văn SGK</option>
-                              <option value="practice">Luyện phím</option>
+                              <option value="all">Mọi nhóm</option>
+                              <option value="exercise">{LESSON_GROUP_LABEL.exercise}</option>
+                              <option value="poem">{LESSON_GROUP_LABEL.poem}</option>
+                              <option value="prose">{LESSON_GROUP_LABEL.prose}</option>
                             </select>
                             <label className="h-9 flex-1 min-w-[160px] flex items-center gap-1.5 bg-white px-3 rounded-xl border border-slate-300">
                               <Search className="w-4 h-4 text-slate-400 shrink-0" />
@@ -3027,7 +3222,7 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                                     <span className="flex items-center gap-1.5 flex-wrap mt-0.5">
                                       <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-sky-100 text-sky-800">Lớp {l.gradeLevel || '?'}</span>
                                       {ownerBadge(l)}
-                                      {isPoem && <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-purple-100 text-purple-800">Thơ/Văn SGK</span>}
+                                      {groupChip(l)}
                                       <span className="text-[11px] font-semibold text-slate-500">{l.targetWpm || 18} WPM</span>
                                       {l.imageUrl && <span className="text-[11px] font-semibold text-slate-500">· có ảnh SGK</span>}
                                     </span>
@@ -3080,8 +3275,9 @@ export const TeacherLessonModal: React.FC<TeacherLessonModalProps> = ({
                                 <span className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-black flex items-center justify-center shrink-0">{idx + 1}</span>
                                 <span className="min-w-0 flex-1">
                                   <span className="block text-sm font-bold text-slate-900 truncate">{l.title}</span>
-                                  <span className="text-[11px] text-slate-500 font-semibold">
-                                    Lớp {l.gradeLevel || '?'} · {isSystemLesson(l) ? 'Hệ thống' : lessonOwnerKey(l)}
+                                  <span className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-500 font-semibold">
+                                    {groupChip(l)}
+                                    <span>Lớp {l.gradeLevel || '?'} · {isSystemLesson(l) ? 'Hệ thống' : lessonOwnerKey(l)}</span>
                                   </span>
                                 </span>
                                 <button type="button" onClick={() => move(idx, -1)} disabled={idx === 0} title="Lên trên" className="w-7 h-7 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-30 cursor-pointer">▲</button>

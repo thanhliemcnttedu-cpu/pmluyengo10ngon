@@ -639,3 +639,15 @@
   }
 }
 
+
+/* Ô tên đăng nhập / mật khẩu: phông kiểu máy chữ để chữ i, I, l, 1 và o, O, 0 không lẫn nhau */
+.login-credential {
+  font-family: Consolas, 'Cascadia Mono', 'Roboto Mono', ui-monospace, 'Courier New', monospace;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.login-credential::placeholder {
+  font-family: 'Be Vietnam Pro', system-ui, sans-serif;
+  font-weight: 500;
+  letter-spacing: normal;
+}
